@@ -235,3 +235,10 @@ yarn-error.log
 cbir-workspace/
 provenance-data/
 tests/local-tests/
+
+scripts/
+.agent/
+mkdocs.yml
+image-gallery-profiling/
+!system_modules/front-end-platform/
+!system_modules/cbir-system/
