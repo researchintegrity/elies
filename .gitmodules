@@ -1,0 +1,27 @@
+[submodule "system_modules/watermark-removal"]
+	path = system_modules/watermark-removal
+	url = https://github.com/researchintegrity/watermark-removal.git
+[submodule "system_modules/pdf-image-extraction"]
+	path = system_modules/pdf-image-extraction
+	url = https://github.com/researchintegrity/pdf-image-extraction.git
+[submodule "system_modules/panel-extractor"]
+	path = system_modules/panel-extractor
+	url = https://github.com/researchintegrity/panel-extractor.git
+[submodule "system_modules/TruFor"]
+	path = system_modules/TruFor
+	url = https://github.com/researchintegrity/TruFor.git
+[submodule "system_modules/cbir-system"]
+	path = system_modules/cbir-system
+	url = https://github.com/researchintegrity/cbir-system.git
+[submodule "system_modules/copy-move-detection"]
+	path = system_modules/copy-move-detection
+	url = https://github.com/researchintegrity/copy-move-detection.git
+[submodule "system_modules/copy-move-detection-keypoint"]
+	path = system_modules/copy-move-detection-keypoint
+	url = https://github.com/researchintegrity/copy-move-detection-keypoint.git
+[submodule "system_modules/provenance-analysis"]
+	path = system_modules/provenance-analysis
+	url = https://github.com/researchintegrity/provenance-analysis.git
+[submodule "system_modules/elis-frontend"]
+	path = system_modules/elis-frontend
+	url = https://github.com/researchintegrity/elis-frontend.git
