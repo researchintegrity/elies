@@ -1,0 +1,295 @@
+services:
+  # FastAPI Application
+  api:
+    build: .
+    ports:
+      - "${API_PORT:-8000}:${API_PORT:-8000}"
+    environment:
+      MONGODB_URL: mongodb://mongo:27017
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRATION_HOURS: 24
+      CONTAINER_WORKSPACE_PATH: ${CONTAINER_WORKSPACE_PATH}
+      HOST_WORKSPACE_PATH: ${HOST_WORKSPACE_PATH}
+      # CBIR service configuration (use container name when running in Docker)
+      CBIR_SERVICE_HOST: ${CBIR_SERVICE_HOST:-cbir-service}
+      CBIR_SERVICE_PORT: ${CBIR_SERVICE_PORT:-8001}
+      # Provenance service configuration
+      PROVENANCE_SERVICE_HOST: provenance-service
+      PROVENANCE_SERVICE_PORT: ${PROVENANCE_SERVICE_PORT:-8000}
+    depends_on:
+      - mongo
+      - redis
+    volumes:
+      - ${HOST_WORKSPACE_PATH}:${CONTAINER_WORKSPACE_PATH}
+    command: uvicorn app.main:app --host 0.0.0.0 --port ${API_PORT:-8000} --reload
+    networks:
+      - elis_network
+      - milvus # Connect to CBIR/Milvus network for inter-service communication
+
+  # Redis Message Broker
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - elis_network
+
+  # MongoDB Database (unauthenticated for local development)
+  mongo:
+    image: mongo:7
+    ports:
+      - "${MONGODB_PORT:-27017}:27017"
+    # environment:
+    #   MONGO_INITDB_ROOT_USERNAME: admin
+    #   MONGO_INITDB_ROOT_PASSWORD: password
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    logging:
+      driver: "none"
+    networks:
+      - elis_network
+
+  # Celery Worker (scalable)
+  # Scale workers using: docker-compose up -d --scale worker_1=5
+  # Or modify NUM_WORKERS in .env and restart
+  workers:
+    build: .
+    environment:
+      MONGODB_URL: mongodb://mongo:27017
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CONTAINER_WORKSPACE_PATH: ${CONTAINER_WORKSPACE_PATH}
+      HOST_WORKSPACE_PATH: ${HOST_WORKSPACE_PATH}
+      JWT_SECRET: ${JWT_SECRET}
+      TRUFOR_USE_GPU: "false"
+      # CBIR service configuration (use container name when running in Docker)
+      CBIR_SERVICE_HOST: ${CBIR_SERVICE_HOST:-cbir-service}
+      CBIR_SERVICE_PORT: ${CBIR_SERVICE_PORT:-8001}
+      # Provenance service configuration
+      PROVENANCE_SERVICE_HOST: provenance-service
+      PROVENANCE_SERVICE_PORT: ${PROVENANCE_SERVICE_PORT:-8000}
+    depends_on:
+      - redis
+      - mongo
+    volumes:
+      - ${HOST_WORKSPACE_PATH}:${CONTAINER_WORKSPACE_PATH}
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: celery -A app.celery_config worker -l info -n worker@%h -c ${WORKER_CONCURRENCY:-1}
+    restart: unless-stopped
+    networks:
+      - elis_network
+      - milvus # Connect to CBIR/Milvus network for inter-service communication
+
+  # Provenance Analysis Service
+  provenance-service:
+    container_name: provenance-service
+    build:
+      context: system_modules/provenance-analysis
+      dockerfile: Dockerfile.api
+    ports:
+      - "${PROVENANCE_SERVICE_PORT:-8002}:${PROVENANCE_SERVICE_PORT:-8000}"
+    volumes:
+      - ${HOST_WORKSPACE_PATH}:${CONTAINER_WORKSPACE_PATH}
+      - provenance_output:/app/output
+    environment:
+      - CBIR_ENDPOINT=http://cbir-service:${CBIR_SERVICE_PORT:-8001}
+      - PROVENANCE_OUTPUT_DIR=/app/output
+      - REMOTE_DATA_PATH=${CONTAINER_WORKSPACE_PATH}
+      - PROVENANCE_SERVICE_PORT=${PROVENANCE_SERVICE_PORT:-8000}
+    networks:
+      - elis_network
+      - milvus
+
+  flower:
+    image: mher/flower:2.0
+    ports:
+      - "${FLOWER_PORT:-5555}:5555"
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/1
+    depends_on:
+      - redis
+    command: celery --broker=redis://redis:6379/0 flower --port=5555
+    networks:
+      - elis_network
+
+  # ============================================================================
+  # CBIR SYSTEM SERVICES
+  # ============================================================================
+  etcd:
+    container_name: milvus-etcd
+    image: quay.io/coreos/etcd:v3.5.5
+    environment:
+      - ETCD_AUTO_COMPACTION_MODE=revision
+      - ETCD_AUTO_COMPACTION_RETENTION=1000
+      - ETCD_QUOTA_BACKEND_BYTES=4294967296
+      - ETCD_SNAPSHOT_COUNT=50000
+    volumes:
+      - milvus_etcd_data:/etcd
+    command: etcd -advertise-client-urls=http://127.0.0.1:2379 -listen-client-urls=http://0.0.0.0:2379 --data-dir /etcd
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - milvus
+
+  minio:
+    container_name: milvus-minio
+    image: minio/minio:RELEASE.2023-03-20T20-16-18Z
+    environment:
+      MINIO_ACCESS_KEY: minioadmin
+      MINIO_SECRET_KEY: minioadmin
+      MINIO_API_PORT: 9010
+    ports:
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "${MINIO_API_PORT:-9010}:9000"
+    volumes:
+      - milvus_minio_data:/minio_data
+    command: minio server /minio_data --console-address ":9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    networks:
+      - milvus
+
+  milvus-standalone:
+    container_name: milvus-standalone
+    image: milvusdb/milvus:v2.3.3
+    command: ["milvus", "run", "standalone"]
+    security_opt:
+      - seccomp:unconfined
+    environment:
+      ETCD_ENDPOINTS: etcd:2379
+      MINIO_ADDRESS: minio:9000
+    volumes:
+      - milvus_data:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      start_period: 90s
+      timeout: 20s
+      retries: 3
+    ports:
+      - "${MILVUS_PORT:-19530}:19530"
+      - "${MILVUS_METRICS_PORT:-9091}:9091"
+    depends_on:
+      - "etcd"
+      - "minio"
+    networks:
+      - milvus
+
+  attu:
+    container_name: attu
+    image: zilliz/attu:v2.3.1
+    environment:
+      MILVUS_URL: milvus-standalone:19530
+    ports:
+      - "${ATTU_PORT:-3322}:3000"
+    depends_on:
+      - milvus-standalone
+    networks:
+      - milvus
+
+  cbir-service:
+    container_name: cbir-service
+    build:
+      context: system_modules/cbir-system
+      dockerfile: docker/Dockerfile
+    ports:
+      - "${CBIR_SERVICE_PORT:-8001}:${CBIR_SERVICE_PORT:-8001}"
+    volumes:
+      - ./system_modules/cbir-system/src:/app/src
+      - ./system_modules/cbir-system/config:/app/config
+      - ./system_modules/cbir-system/models:/app/models
+      - ${HOST_WORKSPACE_PATH}:${CONTAINER_WORKSPACE_PATH}
+    environment:
+      - MILVUS_HOST=milvus-standalone
+      - MODEL_DEVICE=cpu
+      - CBIR_SERVICE_PORT=${CBIR_SERVICE_PORT:-8001}
+    depends_on:
+      - milvus-standalone
+    networks:
+      - elis_network
+      - milvus
+
+  # ============================================================================
+  # TOOL IMAGES (Build Only)
+  # ============================================================================
+  pdf-extractor:
+    image: pdf-extractor:latest
+    build:
+      context: system_modules/pdf-image-extraction
+    profiles: ["tools"]
+
+  watermark-removal:
+    image: pdf-watermark-removal:latest
+    build:
+      context: system_modules/watermark-removal
+    profiles: ["tools"]
+
+  panel-extractor:
+    image: panel-extractor:latest
+    build:
+      context: system_modules/panel-extractor
+      dockerfile: Dockerfile.minimal
+      # for gpu support, use Dockerfile.gpu
+    profiles: ["tools"]
+
+  copy-move-detection:
+    image: copy-move-detection:latest
+    build:
+      context: system_modules/copy-move-detection
+    profiles: ["tools"]
+
+  copy-move-detection-keypoint:
+    image: copy-move-detection-keypoint:latest
+    build:
+      context: system_modules/copy-move-detection-keypoint
+    profiles: ["tools"]
+
+  trufor:
+    image: trufor:latest
+    build:
+      context: system_modules/TruFor/docker
+      dockerfile: Dockerfile
+    profiles: ["tools"]
+
+volumes:
+  mongo_data:
+    driver: local
+  mongo_test_data:
+    driver: local
+  redis_data:
+    driver: local
+  provenance_output:
+    driver: local
+  milvus_etcd_data:
+    driver: local
+  milvus_minio_data:
+    driver: local
+  milvus_data:
+    driver: local
+
+networks:
+  elis_network:
+    driver: bridge
+  milvus:
+    driver: bridge
