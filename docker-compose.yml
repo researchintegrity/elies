@@ -65,21 +65,6 @@ services:
     networks:
       - elies_network
 
-  # MongoDB Test Database (unauthenticated for local testing)
-  # mongo_test:
-  #   image: mongo:6
-  #   ports:
-  #     - "27018:27017"
-  #   volumes:
-  #     - mongo_test_data:/data/db
-  #   healthcheck:
-  #     test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
-  #     interval: 5s
-  #     timeout: 3s
-  #     retries: 5
-  #   networks:
-  #     - elies_network
-
   # Celery Worker 1
   worker_1:
     build: .

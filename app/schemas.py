@@ -983,6 +983,7 @@ class JobType(str, Enum):
     PROVENANCE = "provenance"
     IMAGE_DELETION = "image_deletion"
     DOCUMENT_DELETION = "document_deletion"
+    BATCH_UPLOAD = "batch_upload"
 
 
 class JobStatus(str, Enum):

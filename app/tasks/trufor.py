@@ -21,7 +21,8 @@ def detect_trufor(
     image_id: str,
     user_id: str,
     image_path: str,
-    save_noiseprint: bool = False
+    save_noiseprint: bool = False,
+    job_id: str = None
 ):
     """
     Run TruFor detection on an image asynchronously.
@@ -32,9 +33,9 @@ def detect_trufor(
         user_id: User ID
         image_path: Path to the image file
         save_noiseprint: Whether to save the noiseprint map (default: False)
+        job_id: Optional pre-created job ID from the route (for pending state tracking)
     """
     analyses_col = get_analyses_collection()
-    job_id = None
     
     def update_status(status_msg: str):
         """Callback to update analysis status in DB"""
@@ -55,14 +56,15 @@ def detect_trufor(
             logger.error(f"Failed to update status for analysis {analysis_id}: {e}")
 
     try:
-        # Create job log entry
-        job_id = create_job_log(
-            user_id=user_id,
-            job_type=JobType.TRUFOR,
-            title="TruFor Forgery Detection",
-            celery_task_id=self.request.id,
-            input_data={"image_id": image_id, "analysis_id": analysis_id, "save_noiseprint": save_noiseprint}
-        )
+        # Use provided job_id or create one if not provided (backward compatibility)
+        if not job_id:
+            job_id = create_job_log(
+                user_id=user_id,
+                job_type=JobType.TRUFOR,
+                title="TruFor Forgery Detection",
+                celery_task_id=self.request.id,
+                input_data={"image_id": image_id, "analysis_id": analysis_id, "save_noiseprint": save_noiseprint}
+            )
         
         # Update status to processing
         update_job_progress(job_id, user_id, JobStatus.PROCESSING, 10, "Starting TruFor detection...")

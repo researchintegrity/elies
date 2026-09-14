@@ -20,6 +20,8 @@ from app.exceptions import (
     ResourceNotFoundError,
     ValidationError,
 )
+from app.schemas import JobType, JobStatus
+from app.services.job_logger import create_job_log, complete_job
 from app.services.relationship_service import remove_relationships_for_image
 from app.tasks.cbir import cbir_delete_image
 from app.utils.file_storage import delete_file, update_user_storage_in_db
@@ -72,79 +74,109 @@ async def delete_image_and_artifacts(
             "Cannot delete extracted images directly. Delete the document instead."
         )
     
-    # Delete from CBIR index if it was indexed
-    if img.get("cbir_indexed"):
-        try:
-            cbir_delete_image.delay(
-                user_id=user_id,
-                image_id=image_id,
-                image_path=img["file_path"]
-            )
-            logger.info(f"Queued CBIR deletion for image {image_id}")
-        except Exception as e:
-            logger.warning(f"Failed to queue CBIR deletion for image {image_id}: {e}")
-            # Continue with deletion even if CBIR deletion fails to queue
+    # Create job log for tracking this deletion
+    image_name = img.get("original_filename", image_id)
+    job_id = create_job_log(
+        user_id=user_id,
+        job_type=JobType.IMAGE_DELETION,
+        title=f"Deleting image: {image_name}",
+        input_data={"image_id": image_id, "filename": image_name}
+    )
     
-    # Delete image file from disk
-    file_path = img["file_path"]
-    
-    # In TEST environment, we need to convert container path back to host path
-    # because TestClient runs on host but DB has container paths
-    from app.config.settings import RUNNING_ENV, convert_container_path_to_host
-    if RUNNING_ENV == "TEST":
-        try:
-            file_path = convert_container_path_to_host(file_path)
-        except ValueError:
-            # If conversion fails, try using original path
-            pass
-            
-    success, error = delete_file(file_path)
-    if not success:
-        raise FileOperationError("delete", str(file_path), error)
-    
-    # Delete associated annotations from both single and dual collections
-    single_annotations_col = get_single_annotations_collection()
-    dual_annotations_col = get_dual_annotations_collection()
-    annotations_deleted = 0
-
-    # Delete single-image annotations
-    result = single_annotations_col.delete_many({
-        "image_id": image_id,
-        "user_id": user_id
-    })
-    annotations_deleted += result.deleted_count
-
-    # Delete dual-image annotations (where this image is source or target)
-    result = dual_annotations_col.delete_many({
-        "user_id": user_id,
-        "$or": [
-            {"source_image_id": image_id},
-            {"target_image_id": image_id}
-        ]
-    })
-    annotations_deleted += result.deleted_count
-    
-    # Cascade delete relationships involving this image
-    relationships_deleted = 0
     try:
-        relationships_deleted = await remove_relationships_for_image(image_id, user_id)
-        if relationships_deleted > 0:
-            logger.info(f"Cascade deleted {relationships_deleted} relationships for image {image_id}")
+        # Delete from CBIR index if it was indexed
+        if img.get("cbir_indexed"):
+            try:
+                cbir_delete_image.delay(
+                    user_id=user_id,
+                    image_id=image_id,
+                    image_path=img["file_path"]
+                )
+                logger.info(f"Queued CBIR deletion for image {image_id}")
+            except Exception as e:
+                logger.warning(f"Failed to queue CBIR deletion for image {image_id}: {e}")
+                # Continue with deletion even if CBIR deletion fails to queue
+        
+        # Delete image file from disk
+        file_path = img["file_path"]
+        
+        # In TEST environment, we need to convert container path back to host path
+        # because TestClient runs on host but DB has container paths
+        from app.config.settings import RUNNING_ENV, convert_container_path_to_host
+        if RUNNING_ENV == "TEST":
+            try:
+                file_path = convert_container_path_to_host(file_path)
+            except ValueError:
+                # If conversion fails, try using original path
+                pass
+                
+        success, error = delete_file(file_path)
+        if not success:
+            raise FileOperationError("delete", str(file_path), error)
+        
+        # Delete associated annotations from both single and dual collections
+        single_annotations_col = get_single_annotations_collection()
+        dual_annotations_col = get_dual_annotations_collection()
+        annotations_deleted = 0
+
+        # Delete single-image annotations
+        result = single_annotations_col.delete_many({
+            "image_id": image_id,
+            "user_id": user_id
+        })
+        annotations_deleted += result.deleted_count
+
+        # Delete dual-image annotations (where this image is source or target)
+        result = dual_annotations_col.delete_many({
+            "user_id": user_id,
+            "$or": [
+                {"source_image_id": image_id},
+                {"target_image_id": image_id}
+            ]
+        })
+        annotations_deleted += result.deleted_count
+        
+        # Cascade delete relationships involving this image
+        relationships_deleted = 0
+        try:
+            relationships_deleted = await remove_relationships_for_image(image_id, user_id)
+            if relationships_deleted > 0:
+                logger.info(f"Cascade deleted {relationships_deleted} relationships for image {image_id}")
+        except Exception as e:
+            logger.warning(f"Failed to cascade delete relationships for image {image_id}: {e}")
+            # Continue with deletion even if relationship deletion fails
+        
+        # Delete image record from MongoDB
+        images_col.delete_one({"_id": img_oid})
+        
+        # Update user storage in database
+        update_user_storage_in_db(user_id)
+        
+        result = {
+            "deleted_id": image_id,
+            "annotations_deleted": annotations_deleted,
+            "relationships_deleted": relationships_deleted
+        }
+        
+        # Mark job as completed
+        complete_job(
+            job_id=job_id,
+            user_id=user_id,
+            status=JobStatus.COMPLETED,
+            output_data=result
+        )
+        
+        return result
+        
     except Exception as e:
-        logger.warning(f"Failed to cascade delete relationships for image {image_id}: {e}")
-        # Continue with deletion even if relationship deletion fails
-    
-    # Delete image record from MongoDB
-    images_col.delete_one({"_id": img_oid})
-    
-    # Update user storage in database
-    update_user_storage_in_db(user_id)
-    
-    return {
-        "deleted_id": image_id,
-        "annotations_deleted": annotations_deleted,
-        "relationships_deleted": relationships_deleted
-    }
+        # Mark job as failed
+        complete_job(
+            job_id=job_id,
+            user_id=user_id,
+            status=JobStatus.FAILED,
+            errors=[str(e)]
+        )
+        raise
 
 
 async def list_images(

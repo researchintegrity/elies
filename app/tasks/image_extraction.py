@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 
 @celery_app.task(bind=True, max_retries=CELERY_MAX_RETRIES, name="tasks.extract_images")
-def extract_images_from_document(self, doc_id: str, user_id: str, pdf_path: str):
+def extract_images_from_document(self, doc_id: str, user_id: str, pdf_path: str, job_id: str = None):
     """
     Extract images from PDF document asynchronously
     
@@ -34,6 +34,7 @@ def extract_images_from_document(self, doc_id: str, user_id: str, pdf_path: str)
         doc_id: MongoDB document ID
         user_id: User who uploaded document
         pdf_path: Full path to PDF file
+        job_id: Optional pre-created job ID from the route (for pending state tracking)
         
     Returns:
         Dict with extraction results
@@ -42,17 +43,17 @@ def extract_images_from_document(self, doc_id: str, user_id: str, pdf_path: str)
         Retries automatically with exponential backoff on failure
     """
     documents_col = get_documents_collection()
-    job_id = None
     
     try:
-        # Create job log entry
-        job_id = create_job_log(
-            user_id=user_id,
-            job_type=JobType.IMAGE_EXTRACTION,
-            title="PDF Image Extraction",
-            celery_task_id=self.request.id,
-            input_data={"doc_id": doc_id}
-        )
+        # Use provided job_id or create one if not provided (backward compatibility)
+        if not job_id:
+            job_id = create_job_log(
+                user_id=user_id,
+                job_type=JobType.IMAGE_EXTRACTION,
+                title="PDF Image Extraction",
+                celery_task_id=self.request.id,
+                input_data={"doc_id": doc_id}
+            )
         
         update_job_progress(job_id, user_id, JobStatus.PROCESSING, 10, "Starting extraction...")
         logger.info(f"Starting image extraction for doc_id={doc_id}")

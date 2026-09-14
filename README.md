@@ -29,39 +29,45 @@ Our goal is to democratize access to advanced forensic tools, empowering researc
 Currently, the system is focused on **image forensics**, but future versions will extend to text and statistical data analysis.
 
 
+
+https://github.com/user-attachments/assets/f23e7ad3-1dbd-46d5-b5c5-5b897fd4a88b
+
+
 ---
 
 ## Getting Started
 
 To get ELIES running on your machine, you will need [Docker Compose](https://docs.docker.com/compose/) and [Node.js](https://nodejs.org/).
 
-#### 1. Clone the repository
+#### 1. Clone the repository and submodules
 ```bash
-git git clone --recurse-submodules git@github.com:researchintegrity/elies-backend.git
-cd elies-backend
+git clone --recurse-submodules git@github.com:researchintegrity/elies.git
+cd elies
+git submodule update --init --remote # ensure latest submodule versions
+
 ```
 
 #### 1.1 Fix .env
 ```bash
 cp .env.example .env
 # Edit .env to set the HOST_WORKSPACE_PATH
-# >> HOST_WORKSPACE_PATH=<path/to-current-dir>/elies-backend/system_modules/elies-frontend/workspace
+# >> HOST_WORKSPACE_PATH=<path/to-current-dir>/elies/system_modules/elies-frontend/workspace
 ```
 
 #### 2. Build the tools
 This step could take some while as it will download and compile multiple models from different servers
 ```bash
-docker-compose --profile tools build
+docker compose --profile tools build
 ```
 
 #### 3. Launch the backend
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 #### (Production Alternative) 3. Launch the backend with multiple workers (n=5)
 ```bash
-docker-compose -f docker-compose-prod.yml up -d --scale workers=5 
+docker compose -f docker-compose-prod.yml up -d --scale workers=5 
 ```
 
 #### 4. Launch the frontend
@@ -86,9 +92,9 @@ The project was previously spelled **ELIS**. If you already run an older checkou
   mongodump --db elis_system --archive=elis.archive
   mongorestore --archive=elis.archive --nsFrom 'elis_system.*' --nsTo 'elies_system.*'
   ```
-- **Docker network**: run `docker-compose down` *before* pulling, so the old `elis_network` is removed.
+- **Docker network**: run `docker compose down` *before* pulling, so the old `elis_network` is removed.
 - **Frontend path**: the frontend submodule moved to `system_modules/elies-frontend`. Run `git submodule sync && git submodule update --init`, move your existing `workspace/` folder there, and update `HOST_WORKSPACE_PATH` in `.env`.
-- **Clone folder**: Docker Compose prefixes volume names (including MongoDB data) with the folder name. If you rename your `elis-backend` folder, set `COMPOSE_PROJECT_NAME=elis-backend` to keep using the existing volumes.
+- **Clone folder**: Docker Compose prefixes volume names (including MongoDB data) with the folder name. If you rename your existing clone folder (e.g. `elis` or `elis-backend`), set `COMPOSE_PROJECT_NAME` to the old folder name to keep using the existing volumes.
 
 ---
 
@@ -107,7 +113,15 @@ ELIES integrates multiple specialized modules to detect manipulation.
 | **[Provenance Analysis](https://github.com/researchintegrity/provenance-analysis)** | Tracks reused and manipulated data across articles and datasets. | <div align="center">✅</div> |
 
 
-<!-- TODO: INCLUDE A 30s VIDEO OF EACH THE MODULES WORKING -->
+## TODOs
+
+- [ ] Documentation
+- [ ] UI/UX Improvement (check the [front-end issues](https://github.com/researchintegrity/elies-frontend/issues))
+- [ ] AI-image detection module
+- [ ] AI-text detection module
+- [ ] OpenAlex API linked to ELIES
+
+Found a bug or want a new feature, please contribute by opening a new issue!
 
 ---
 
@@ -136,4 +150,5 @@ Learn more about her work at her blog: [Science Integrity Digest](https://scienc
 
 <div align="center">
   <sub>Built with ❤️ for Science</sub>
+
 </div>

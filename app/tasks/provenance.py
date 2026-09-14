@@ -103,7 +103,8 @@ def provenance_analysis_task(
     k: int = 10,
     q: int = 5,
     max_depth: int = 3,
-    descriptor_type: str = "cv_rsift"
+    descriptor_type: str = "cv_rsift",
+    job_id: str = None
 ):
     """
     Run provenance analysis asynchronously.
@@ -116,25 +117,26 @@ def provenance_analysis_task(
         q: Top-Q expansion
         max_depth: Expansion depth
         descriptor_type: Descriptor type
+        job_id: Optional pre-created job ID from the route (for pending state tracking)
     """
     analyses_col = get_analyses_collection()
-    job_id = None
     
     try:
-        # Create job log entry
-        job_id = create_job_log(
-            user_id=user_id,
-            job_type=JobType.PROVENANCE,
-            title="Provenance Analysis",
-            celery_task_id=self.request.id,
-            input_data={
-                "query_image_id": query_image_id,
-                "analysis_id": analysis_id,
-                "k": k,
-                "q": q,
-                "max_depth": max_depth
-            }
-        )
+        # Use provided job_id or create one if not provided (backward compatibility)
+        if not job_id:
+            job_id = create_job_log(
+                user_id=user_id,
+                job_type=JobType.PROVENANCE,
+                title="Provenance Analysis",
+                celery_task_id=self.request.id,
+                input_data={
+                    "query_image_id": query_image_id,
+                    "analysis_id": analysis_id,
+                    "k": k,
+                    "q": q,
+                    "max_depth": max_depth
+                }
+            )
         
         # Update status to processing
         update_job_progress(job_id, user_id, JobStatus.PROCESSING, 10, "Running provenance analysis...")

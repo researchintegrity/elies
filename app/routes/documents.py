@@ -23,8 +23,10 @@ from app.schemas import (
     WatermarkRemovalInitiationResponse,
     WatermarkRemovalRequest,
     WatermarkRemovalStatusResponse,
+    JobType,
 )
 from app.services.document_service import delete_document_and_artifacts
+from app.services.job_logger import create_job_log
 from app.services.quota_helpers import augment_with_quota
 from app.services.resource_helpers import get_owned_resource
 from app.services.watermark_removal_service import (
@@ -173,11 +175,20 @@ async def upload_document(
         # Create extraction output directory
         get_extraction_output_path(user_id_str, doc_id)
         
+        # Create job log entry for the jobs dashboard (pending state)
+        job_id = create_job_log(
+            user_id=user_id_str,
+            job_type=JobType.IMAGE_EXTRACTION,
+            title=f"Image Extraction: {new_filename}",
+            input_data={"document_id": doc_id, "filename": str(new_filename)}
+        )
+        
         # ✨ QUEUE IMAGE EXTRACTION TASK (asynchronous - returns immediately)
         task = extract_images_from_document.delay(
             doc_id=doc_id,
             user_id=user_id_str,
-            pdf_path=str(storage_path)
+            pdf_path=str(storage_path),
+            job_id=job_id
         )
         
         # Store task_id in document for status checking

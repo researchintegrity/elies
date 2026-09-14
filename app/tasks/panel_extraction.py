@@ -28,7 +28,8 @@ def extract_panels_from_images(
     self,
     image_ids: List[str],
     user_id: str,
-    image_paths: List[str]
+    image_paths: List[str],
+    job_id: str = None
 ):
     """
     Extract panels from images asynchronously
@@ -45,6 +46,7 @@ def extract_panels_from_images(
         image_ids: List of MongoDB image document IDs
         user_id: User who owns the images
         image_paths: List of full paths to image files
+        job_id: Optional pre-created job ID from the service (for pending state tracking)
 
     Returns:
         Dict with panel extraction results {
@@ -56,17 +58,17 @@ def extract_panels_from_images(
     """
     images_col = get_images_collection()
     task_id = self.request.id
-    job_id = None
 
     try:
-        # Create job log entry
-        job_id = create_job_log(
-            user_id=user_id,
-            job_type=JobType.PANEL_EXTRACTION,
-            title=f"Panel Extraction ({len(image_ids)} images)",
-            celery_task_id=task_id,
-            input_data={"image_ids": image_ids}
-        )
+        # Use provided job_id or create one if not provided (backward compatibility)
+        if not job_id:
+            job_id = create_job_log(
+                user_id=user_id,
+                job_type=JobType.PANEL_EXTRACTION,
+                title=f"Panel Extraction ({len(image_ids)} images)",
+                celery_task_id=task_id,
+                input_data={"image_ids": image_ids}
+            )
         
         update_job_progress(job_id, user_id, JobStatus.PROCESSING, 10, "Validating images...")
         logger.info(

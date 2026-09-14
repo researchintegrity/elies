@@ -35,11 +35,14 @@ from app.schemas import (
     PanelExtractionInitiationResponse,
     PanelExtractionRequest,
     PanelExtractionStatusResponse,
+    JobType,
+    JobStatus,
 )
 from app.services.image_service import (
     delete_image_and_artifacts,
     list_images as list_images_service,
 )
+from app.services.job_logger import create_job_log, complete_job
 from app.services.panel_extraction_service import (
     get_panel_extraction_status,
     get_panels_by_source_image,
@@ -414,11 +417,20 @@ async def upload_images_batch(
             detail="No valid images could be uploaded"
         )
     
+    # Create job log entry for the jobs dashboard (tracks the batch upload)
+    main_job_id = create_job_log(
+        user_id=user_id_str,
+        job_type=JobType.BATCH_UPLOAD,
+        title=f"Batch Upload ({len(uploaded_images)} images)",
+        input_data={"image_count": len(uploaded_images), "image_ids": [img["image_id"] for img in uploaded_images]}
+    )
+    
     # Update user storage
     try:
         update_user_storage_in_db(user_id_str)
     except Exception as e:
         logger.error(f"Failed to update user storage for user {user_id_str}: {e}")
+        complete_job(main_job_id, user_id_str, JobStatus.FAILED, errors=[f"Failed to update storage: {str(e)}"])
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to update user storage after upload"
@@ -471,12 +483,14 @@ async def upload_images_batch(
         cbir_index_batch_with_progress.delay(
             job_id=job_id,
             user_id=user_id_str,
-            image_items=uploaded_images
+            image_items=uploaded_images,
+            main_job_id=main_job_id
         )
     except Exception as e:
         logger.error(f"Failed to queue batch indexing task: {e}")
+        complete_job(main_job_id, user_id_str, JobStatus.FAILED, errors=[f"Failed to queue indexing: {str(e)}"])
         # Update job status to failed
-          # Attempt to roll back uploaded images to avoid orphaned resources
+        # Attempt to roll back uploaded images to avoid orphaned resources
         cleanup_errors = []
         for item in uploaded_images:
             image_id = item.get("image_id")

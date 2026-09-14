@@ -64,7 +64,7 @@ services:
       - elies_network
 
   # Celery Worker (scalable)
-  # Scale workers using: docker-compose up -d --scale worker_1=5
+  # Scale workers using: docker-compose up -d --scale workers=5
   # Or modify NUM_WORKERS in .env and restart
   workers:
     build: .

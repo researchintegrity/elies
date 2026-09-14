@@ -9,6 +9,8 @@ from app.db.mongodb import (
     get_analyses_collection,
     get_indexing_jobs_collection,
 )
+from app.schemas import JobStatus
+from app.services.job_logger import update_job_progress as update_main_job_progress, complete_job
 from app.utils.docker_cbir import (
     index_image,
     index_images_batch,
@@ -193,7 +195,8 @@ def cbir_index_batch_with_progress(
     self,
     job_id: str,
     user_id: str,
-    image_items: list
+    image_items: list,
+    main_job_id: str = None
 ):
     """
     Index multiple images in batch with progress tracking.
@@ -202,9 +205,10 @@ def cbir_index_batch_with_progress(
     allowing the frontend to poll for progress.
     
     Args:
-        job_id: Unique job ID for tracking
+        job_id: Unique job ID for tracking (indexing_jobs collection)
         user_id: User ID for multi-tenancy
         image_items: List of dicts with 'image_id', 'image_path', 'labels'
+        main_job_id: Optional job ID for the main jobs dashboard
     """
     jobs_col = get_indexing_jobs_collection()
     images_col = get_images_collection()
@@ -257,6 +261,10 @@ def cbir_index_batch_with_progress(
     try:
         logger.info(f"Starting batch indexing with progress for job {job_id}: {total_images} images")
         
+        # Update main job to processing if provided
+        if main_job_id:
+            update_main_job_progress(main_job_id, user_id, JobStatus.PROCESSING, 5, "Starting batch indexing...")
+        
         # Idempotency check: verify job hasn't already been completed by another task instance
         existing_job = jobs_col.find_one({"_id": job_id})
         if existing_job and existing_job.get("status") in TERMINAL_STATUSES:
@@ -281,6 +289,8 @@ def cbir_index_batch_with_progress(
         if not cbir_healthy:
             logger.error(f"CBIR service unavailable for job {job_id}: {cbir_message}")
             deleted_ids = _cleanup_batch_images(image_items, user_id)
+            if main_job_id:
+                complete_job(main_job_id, user_id, JobStatus.FAILED, errors=["CBIR service unavailable"])
             update_job_progress(
                 status=IndexingJobStatus.FAILED.value,
                 processed=total_images,
@@ -370,6 +380,12 @@ def cbir_index_batch_with_progress(
             final_status = IndexingJobStatus.COMPLETED.value
             final_step = f"Successfully indexed {indexed_count} images"
             deleted_ids = []
+            # Update main job as completed
+            if main_job_id:
+                complete_job(
+                    main_job_id, user_id, JobStatus.COMPLETED,
+                    output_data={"indexed_count": indexed_count, "image_count": total_images}
+                )
         else:
             # ALL-OR-NOTHING: Any failure means delete ALL images
             final_status = IndexingJobStatus.FAILED.value
@@ -377,6 +393,9 @@ def cbir_index_batch_with_progress(
             errors.append("Upload failed. Please try again when the service is available.")
             final_step = "Upload failed - images have been removed."
             logger.warning(f"Job {job_id}: Cleaned up {len(deleted_ids)} images after failure")
+            # Update main job as failed
+            if main_job_id:
+                complete_job(main_job_id, user_id, JobStatus.FAILED, errors=errors)
         
         # Final update
         update_job_progress(
@@ -399,6 +418,10 @@ def cbir_index_batch_with_progress(
         
     except Exception as e:
         logger.error(f"Error in batch indexing job {job_id}: {e}")
+        
+        # Update main job as failed
+        if main_job_id:
+            complete_job(main_job_id, user_id, JobStatus.FAILED, errors=[str(e)])
         
         # ALL-OR-NOTHING: Clean up all images on exception
         deleted_ids = _cleanup_batch_images(image_items, user_id)

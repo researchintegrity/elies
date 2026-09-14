@@ -23,7 +23,8 @@ def remove_watermark_from_document(
     doc_id: str,
     user_id: str,
     pdf_path: str,
-    aggressiveness_mode: int = 1
+    aggressiveness_mode: int = 1,
+    job_id: str = None
 ):
     """
     Remove watermark from PDF document asynchronously
@@ -40,6 +41,7 @@ def remove_watermark_from_document(
         user_id: User who uploaded document
         pdf_path: Full path to PDF file
         aggressiveness_mode: Watermark removal mode (1, 2, or 3)
+        job_id: Optional pre-created job ID from the service (for pending state tracking)
         
     Returns:
         Dict with watermark removal results
@@ -48,17 +50,17 @@ def remove_watermark_from_document(
         Retries automatically with exponential backoff on failure
     """
     documents_col = get_documents_collection()
-    job_id = None
     
     try:
-        # Create job log entry
-        job_id = create_job_log(
-            user_id=user_id,
-            job_type=JobType.WATERMARK_REMOVAL,
-            title=f"Watermark Removal (mode {aggressiveness_mode})",
-            celery_task_id=self.request.id,
-            input_data={"doc_id": doc_id, "mode": aggressiveness_mode}
-        )
+        # Use provided job_id or create one if not provided (backward compatibility)
+        if not job_id:
+            job_id = create_job_log(
+                user_id=user_id,
+                job_type=JobType.WATERMARK_REMOVAL,
+                title=f"Watermark Removal (mode {aggressiveness_mode})",
+                celery_task_id=self.request.id,
+                input_data={"doc_id": doc_id, "mode": aggressiveness_mode}
+            )
         
         logger.info(
             f"Starting watermark removal for doc_id={doc_id}, mode={aggressiveness_mode}"

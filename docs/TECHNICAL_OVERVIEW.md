@@ -17,7 +17,7 @@ ELIES is an open-source scientific document and image integrity analysis system.
 ## Project Structure
 
 ```
-elies-backend/
+elies/
 ├── app/
 │   ├── main.py                      # FastAPI application
 │   ├── schemas.py                   # Pydantic validation models
@@ -121,7 +121,7 @@ The easiest way to get the system running is with Docker Compose. This starts al
 
 ```bash
 git clone <repository-url>
-cd elies-backend
+cd elies
 ```
 
 2. **Build the Tool Images (First Time Only)**:
@@ -186,7 +186,7 @@ If you prefer to run services locally without Docker, follow these steps:
 
 ```bash
 git clone <repository-url>
-cd elies-backend
+cd elies
 ```
 
 2. Create and activate a virtual environment:

@@ -32,7 +32,8 @@ def detect_copy_move(
     user_id: str,
     image_path: str,
     method: str = METHOD_KEYPOINT,
-    dense_method: int = 2
+    dense_method: int = 2,
+    job_id: str = None
 ):
     """
     Run copy-move detection on an image asynchronously.
@@ -44,19 +45,20 @@ def detect_copy_move(
         image_path: Path to the image file
         method: Detection method ('keypoint' or 'dense')
         dense_method: Dense method variant (1-5), only used when method='dense'
+        job_id: Optional pre-created job ID from the route (for pending state tracking)
     """
     analyses_col = get_analyses_collection()
-    job_id = None
     
     try:
-        # Create job log entry
-        job_id = create_job_log(
-            user_id=user_id,
-            job_type=JobType.COPY_MOVE_SINGLE,
-            title=f"Copy-Move Detection ({method})",
-            celery_task_id=self.request.id,
-            input_data={"image_id": image_id, "analysis_id": analysis_id, "method": method}
-        )
+        # Use provided job_id or create one if not provided (backward compatibility)
+        if not job_id:
+            job_id = create_job_log(
+                user_id=user_id,
+                job_type=JobType.COPY_MOVE_SINGLE,
+                title=f"Copy-Move Detection ({method})",
+                celery_task_id=self.request.id,
+                input_data={"image_id": image_id, "analysis_id": analysis_id, "method": method}
+            )
         
         # Update status to processing
         update_job_progress(job_id, user_id, JobStatus.PROCESSING, 10, "Starting detection...")
@@ -161,7 +163,8 @@ def detect_copy_move_cross(
     target_image_path: str,
     method: str = METHOD_KEYPOINT,
     dense_method: int = 2,
-    descriptor: str = "cv_rsift"
+    descriptor: str = "cv_rsift",
+    job_id: str = None
 ):
     """
     Run cross-image copy-move detection asynchronously.
@@ -176,24 +179,25 @@ def detect_copy_move_cross(
         method: Detection method ('keypoint' or 'dense')
         dense_method: Dense method variant (1-5), only used when method='dense'
         descriptor: Keypoint descriptor type, only used when method='keypoint'
+        job_id: Optional pre-created job ID from the route (for pending state tracking)
     """
     analyses_col = get_analyses_collection()
-    job_id = None
     
     try:
-        # Create job log entry
-        job_id = create_job_log(
-            user_id=user_id,
-            job_type=JobType.COPY_MOVE_CROSS,
-            title=f"Cross-Image Copy-Move Detection ({method})",
-            celery_task_id=self.request.id,
-            input_data={
-                "source_image_id": source_image_id,
-                "target_image_id": target_image_id,
-                "analysis_id": analysis_id,
-                "method": method
-            }
-        )
+        # Use provided job_id or create one if not provided (backward compatibility)
+        if not job_id:
+            job_id = create_job_log(
+                user_id=user_id,
+                job_type=JobType.COPY_MOVE_CROSS,
+                title=f"Cross-Image Copy-Move Detection ({method})",
+                celery_task_id=self.request.id,
+                input_data={
+                    "source_image_id": source_image_id,
+                    "target_image_id": target_image_id,
+                    "analysis_id": analysis_id,
+                    "method": method
+                }
+            )
         
         # Update status to processing
         update_job_progress(job_id, user_id, JobStatus.PROCESSING, 10, "Starting detection...")

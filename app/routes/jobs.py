@@ -30,6 +30,10 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/jobs", tags=["Jobs"])
 
+# Job types that are secondary/internal and should not appear in the dashboard
+# These are automatically triggered by other operations (e.g., CBIR indexing after upload)
+EXCLUDED_JOB_TYPES = ["cbir_index", "cbir_search", "cbir_delete"]
+
 
 @router.get("/stats", response_model=JobStatsResponse)
 async def get_job_stats(current_user: dict = Depends(get_current_user)):
@@ -41,16 +45,19 @@ async def get_job_stats(current_user: dict = Depends(get_current_user)):
     user_id = str(current_user["_id"])
     jobs_col = get_jobs_collection()
     
+    # Base match filter excluding secondary CBIR jobs
+    base_match = {"user_id": user_id, "job_type": {"$nin": EXCLUDED_JOB_TYPES}}
+    
     # Aggregate counts by status
     status_pipeline = [
-        {"$match": {"user_id": user_id}},
+        {"$match": base_match},
         {"$group": {"_id": "$status", "count": {"$sum": 1}}}
     ]
     status_counts = {doc["_id"]: doc["count"] for doc in jobs_col.aggregate(status_pipeline)}
     
     # Aggregate counts by type
     type_pipeline = [
-        {"$match": {"user_id": user_id}},
+        {"$match": base_match},
         {"$group": {"_id": "$job_type", "count": {"$sum": 1}}}
     ]
     type_counts = {doc["_id"]: doc["count"] for doc in jobs_col.aggregate(type_pipeline)}
@@ -127,10 +134,13 @@ async def list_jobs(
     user_id = str(current_user["_id"])
     jobs_col = get_jobs_collection()
     
-    # Build query
+    # Build query - exclude secondary CBIR jobs unless specifically requested
     query = {"user_id": user_id}
     if job_type:
         query["job_type"] = job_type
+    else:
+        # Exclude secondary job types that are triggered automatically
+        query["job_type"] = {"$nin": EXCLUDED_JOB_TYPES}
     if job_status:
         query["status"] = job_status
     

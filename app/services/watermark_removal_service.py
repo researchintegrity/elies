@@ -6,6 +6,8 @@ Provides business logic for watermark removal CRUD operations
 from bson import ObjectId
 from typing import Dict
 from app.db.mongodb import get_documents_collection
+from app.schemas import JobType
+from app.services.job_logger import create_job_log
 from app.tasks.watermark_removal import remove_watermark_from_document
 from app.config.settings import convert_host_path_to_container
 import logging
@@ -75,12 +77,22 @@ async def initiate_watermark_removal(
         f"user_id={user_id}, mode={aggressiveness_mode}"
     )
     
+    # Create job log entry for the jobs dashboard (pending state)
+    doc_name = doc.get("original_filename", document_id)
+    job_id = create_job_log(
+        user_id=user_id,
+        job_type=JobType.WATERMARK_REMOVAL,
+        title=f"Watermark Removal: {doc_name}",
+        input_data={"document_id": document_id, "filename": doc_name, "mode": aggressiveness_mode}
+    )
+    
     # Queue async watermark removal task
     task = remove_watermark_from_document.delay(
         doc_id=document_id,
         user_id=user_id,
         pdf_path=pdf_path,
-        aggressiveness_mode=aggressiveness_mode
+        aggressiveness_mode=aggressiveness_mode,
+        job_id=job_id
     )
     
     # Update document with task information

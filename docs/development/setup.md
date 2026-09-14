@@ -9,7 +9,7 @@
 1. **Clone the repository**:
    ```bash
    git clone <repository-url>
-   cd elies-backend
+   cd elies
    ```
 
 2. **Environment Variables**:

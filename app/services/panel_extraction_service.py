@@ -5,6 +5,8 @@ import logging
 from typing import Dict, List, Any, Optional
 from bson import ObjectId
 from app.db.mongodb import get_images_collection
+from app.schemas import JobType
+from app.services.job_logger import create_job_log
 from app.tasks.panel_extraction import extract_panels_from_images
 logger = logging.getLogger(__name__)
 
@@ -93,12 +95,21 @@ def initiate_panel_extraction(
     if not validated_ids:
         raise ValueError("No valid images to process")
 
+    # Create job log entry for the jobs dashboard (pending state)
+    job_id = create_job_log(
+        user_id=user_id,
+        job_type=JobType.PANEL_EXTRACTION,
+        title=f"Panel Extraction ({len(validated_ids)} images)",
+        input_data={"image_ids": validated_ids, "image_count": len(validated_ids)}
+    )
+
     # Queue Celery task
     try:
         task = extract_panels_from_images.delay(
             image_ids=validated_ids,
             user_id=user_id,
-            image_paths=image_paths
+            image_paths=image_paths,
+            job_id=job_id
         )
 
         result = {

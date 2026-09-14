@@ -13,7 +13,9 @@ from app.utils.security import get_current_user
 from app.db.mongodb import get_images_collection, get_analyses_collection
 from app.schemas import (
     AnalysisStatus,
+    JobType,
 )
+from app.services.job_logger import create_job_log
 from app.utils.docker_provenance import check_provenance_health
 from app.tasks.provenance import provenance_analysis_task
 from pydantic import BaseModel, Field
@@ -104,6 +106,19 @@ async def analyze_provenance(
         {"$addToSet": {"analysis_ids": analysis_id}}
     )
     
+    # Create job log entry for the jobs dashboard (pending state)
+    job_id = create_job_log(
+        user_id=user_id,
+        job_type=JobType.PROVENANCE,
+        title="Provenance Analysis",
+        input_data={
+            "image_id": request.image_id,
+            "analysis_id": analysis_id,
+            "k": request.k,
+            "max_depth": request.max_depth
+        }
+    )
+    
     # Trigger async task
     provenance_analysis_task.delay(
         analysis_id=analysis_id,
@@ -113,7 +128,8 @@ async def analyze_provenance(
         k=request.k,
         q=request.q,
         max_depth=request.max_depth,
-        descriptor_type=request.descriptor_type
+        descriptor_type=request.descriptor_type,
+        job_id=job_id
     )
     
     return {

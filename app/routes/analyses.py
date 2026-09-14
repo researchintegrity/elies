@@ -11,8 +11,10 @@ from app.schemas import (
     AnalysisType,
     AnalysisStatus,
     PaginatedResponse,
+    JobType,
 )
 from app.services.resource_helpers import get_owned_resource
+from app.services.job_logger import create_job_log
 from app.config.settings import convert_container_path_to_host, is_container_path
 from datetime import datetime
 from bson import ObjectId
@@ -537,6 +539,14 @@ async def analyze_copy_move_single(
     result = analyses_col.insert_one(analysis_doc)
     analysis_id = str(result.inserted_id)
     
+    # Create job log entry for the jobs dashboard (pending state)
+    job_id = create_job_log(
+        user_id=user_id_str,
+        job_type=JobType.COPY_MOVE_SINGLE,
+        title="Copy-Move Detection (Single Image)",
+        input_data={"image_id": request.image_id, "analysis_id": analysis_id, "method": request.method.value}
+    )
+    
     # Update Image document with analysis_id
     images_col = get_images_collection()
     images_col.update_one(
@@ -544,14 +554,15 @@ async def analyze_copy_move_single(
         {"$addToSet": {"analysis_ids": analysis_id}}
     )
     
-    # Trigger task with analysis_id
+    # Trigger task with analysis_id and job_id
     detect_copy_move.delay(
         analysis_id=analysis_id,
         image_id=request.image_id,
         user_id=user_id_str,
         image_path=image["file_path"],
         method=request.method.value,
-        dense_method=request.dense_method
+        dense_method=request.dense_method,
+        job_id=job_id
     )
     
     return {
@@ -618,6 +629,19 @@ async def analyze_copy_move_cross(
     result = analyses_col.insert_one(analysis_doc)
     analysis_id = str(result.inserted_id)
     
+    # Create job log entry for the jobs dashboard (pending state)
+    job_id = create_job_log(
+        user_id=user_id_str,
+        job_type=JobType.COPY_MOVE_CROSS,
+        title="Copy-Move Detection (Cross Image)",
+        input_data={
+            "source_image_id": request.source_image_id,
+            "target_image_id": request.target_image_id,
+            "analysis_id": analysis_id,
+            "method": request.method.value
+        }
+    )
+    
     # Update both Image documents with analysis_id
     images_col = get_images_collection()
     images_col.update_many(
@@ -636,7 +660,8 @@ async def analyze_copy_move_cross(
         target_image_path=target_image["file_path"],
         method=request.method.value,
         dense_method=request.dense_method,
-        descriptor=request.descriptor.value
+        descriptor=request.descriptor.value,
+        job_id=job_id
     )
     
     return {
@@ -685,6 +710,14 @@ async def analyze_trufor(
     result = analyses_col.insert_one(analysis_doc)
     analysis_id = str(result.inserted_id)
     
+    # Create job log entry for the jobs dashboard (pending state)
+    job_id = create_job_log(
+        user_id=user_id_str,
+        job_type=JobType.TRUFOR,
+        title="TruFor Forgery Detection",
+        input_data={"image_id": request.image_id, "analysis_id": analysis_id, "save_noiseprint": request.save_noiseprint}
+    )
+    
     # Update Image document
     images_col = get_images_collection()
     images_col.update_one(
@@ -699,7 +732,8 @@ async def analyze_trufor(
         image_id=request.image_id,
         user_id=user_id_str,
         image_path=image["file_path"],
-        save_noiseprint=request.save_noiseprint
+        save_noiseprint=request.save_noiseprint,
+        job_id=job_id
     )
     
     return {"message": "TruFor analysis started", "analysis_id": analysis_id}
