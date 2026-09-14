@@ -1,9 +1,9 @@
 #!/bin/bash
 # run_tests.sh - Simple test runner script
 
-echo "╔════════════════════════════════════════════╗"
-echo "║  ELIS System - User Operations Test Suite  ║"
-echo "╚════════════════════════════════════════════╝"
+echo "╔═════════════════════════════════════════════╗"
+echo "║  ELIES System - User Operations Test Suite  ║"
+echo "╚═════════════════════════════════════════════╝"
 echo ""
 
 # Colors for output

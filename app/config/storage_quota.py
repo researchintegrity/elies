@@ -1,7 +1,7 @@
 """
 Storage Quota Configuration
 
-This module defines storage quota limits for the ELIS system.
+This module defines storage quota limits for the ELIES system.
 All limits are in bytes. Modify these values to adjust quotas globally.
 
 To modify quotas:

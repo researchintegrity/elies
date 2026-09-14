@@ -22,6 +22,6 @@
 [submodule "system_modules/provenance-analysis"]
 	path = system_modules/provenance-analysis
 	url = https://github.com/researchintegrity/provenance-analysis.git
-[submodule "system_modules/elis-frontend"]
-	path = system_modules/elis-frontend
-	url = https://github.com/researchintegrity/elis-frontend.git
+[submodule "system_modules/elies-frontend"]
+	path = system_modules/elies-frontend
+	url = https://github.com/researchintegrity/elies-frontend.git

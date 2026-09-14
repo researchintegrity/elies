@@ -1,4 +1,4 @@
-# ELIS System Test Coverage Overview
+# ELIES System Test Coverage Overview
 
 ## Quick Reference: What We Test
 

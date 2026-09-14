@@ -1,4 +1,4 @@
-# ELIS API Reference
+# ELIES API Reference
 
 ## Authentication
 

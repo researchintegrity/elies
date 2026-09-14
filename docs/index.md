@@ -1,6 +1,6 @@
-# ELIS Scientific Image Analysis System
+# ELIES Scientific Image Analysis System
 
-ELIS is a extendable and scalable system totally and forever open source dedicated to integrity analysis of research images and documents.
+ELIES is a extendable and scalable system totally and forever open source dedicated to integrity analysis of research images and documents.
 
 
 

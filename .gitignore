@@ -1,5 +1,5 @@
 # ================================================================================
-# ELIS User Management System - .gitignore
+# ELIES User Management System - .gitignore
 # Comprehensive ignore patterns for Python/FastAPI development with VS Code
 # ================================================================================
 
@@ -67,8 +67,8 @@ MANIFEST
 *.db
 *.sqlite
 *.sqlite3
-elis_system.db
-elis_system.db-journal
+elies_system.db
+elies_system.db-journal
 
 # Environment files (keep .env.example)
 .env
@@ -207,7 +207,7 @@ start.ps1
 # ============================================================================
 # Excalidraw diagrams (local development)
 *.excalidraw
-elis-system.excalidraw
+elies-system.excalidraw
 
 # Temporary documentation
 *.md.bak

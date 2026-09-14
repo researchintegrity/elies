@@ -17,7 +17,7 @@ def get_mongodb_url():
     return os.getenv("MONGODB_URL", "mongodb://localhost:27017")
 
 def get_database_name():
-    return os.getenv("DATABASE_NAME", "elis_system")
+    return os.getenv("DATABASE_NAME", "elies_system")
 
 
 class MongoDBConnection:

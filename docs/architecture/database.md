@@ -4,7 +4,7 @@ This system uses MongoDB for flexible, document-first storage. Collections are c
 
 ## Connection
 - Default URL: `mongodb://localhost:27017`
-- Default database: `elis_system`
+- Default database: `elies_system`
 - Override via environment: `MONGODB_URL`, `DATABASE_NAME`
 
 ## Collections (at a glance)

@@ -1,5 +1,5 @@
 """
-ELIS Scientific Image Analysis System
+ELIES Scientific Image Analysis System
 """
 import logging
 
@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.db.mongodb import db_connection
-from app.exceptions import ELISException
+from app.exceptions import ELIESException
 from app.routes import (
     admin,
     analyses,
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 # Create FastAPI app
 app = FastAPI(
-    title="ELIS Scientific Image Analysis System",
+    title="ELIES Scientific Image Analysis System",
     description="A backed-end service for Image Analysis",
     version="1.0.0",
     docs_url="/docs",
@@ -75,17 +75,17 @@ app.include_router(api.router)
 # ============================================================================
 # EXCEPTION HANDLERS
 # ============================================================================
-@app.exception_handler(ELISException)
-async def elis_exception_handler(request: Request, exc: ELISException) -> JSONResponse:
+@app.exception_handler(ELIESException)
+async def elies_exception_handler(request: Request, exc: ELIESException) -> JSONResponse:
     """
-    Handle custom ELIS exceptions and convert to JSON responses.
+    Handle custom ELIES exceptions and convert to JSON responses.
     
     This allows services to raise domain exceptions (ValidationError,
     ResourceNotFoundError, etc.) which are automatically converted
     to appropriate HTTP responses.
     """
     logger.warning(
-        "ELIS exception: %s (status=%d, path=%s)",
+        "ELIES exception: %s (status=%d, path=%s)",
         exc.message,
         exc.status_code,
         request.url.path
@@ -125,7 +125,7 @@ async def root() -> dict:
     Provides information about available endpoints and API version
     """
     return {
-        "message": "Welcome to ELIS User Management System",
+        "message": "Welcome to ELIES User Management System",
         "version": "1.0.0",
         "documentation": {
             "swagger": "/docs",

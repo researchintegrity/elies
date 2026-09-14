@@ -1,6 +1,6 @@
 # Architecture Overview
 
-The ELIS system is built using a microservices-inspired architecture, orchestrated by Docker Compose.
+The ELIES system is built using a microservices-inspired architecture, orchestrated by Docker Compose.
 
 ## Core Components
 

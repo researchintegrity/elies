@@ -16,7 +16,7 @@ from app.db.mongodb import db_connection, get_users_collection
 
 # Using separate test database to avoid conflicts with main app
 # NOTE: Now using main MongoDB connection with test database name
-TEST_DATABASE_NAME = "elis_system"
+TEST_DATABASE_NAME = "elies_system"
 
 
 @pytest.fixture(scope="session")

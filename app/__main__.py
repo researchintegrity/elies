@@ -1,5 +1,5 @@
 """
-ELIS Scientific Image Analysis System
+ELIES Scientific Image Analysis System
 
 This module allows running the application as a package:
     python -m app

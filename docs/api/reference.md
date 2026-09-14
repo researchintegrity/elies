@@ -1,6 +1,6 @@
 # API Reference
 
-The ELIS system provides a RESTful API documented using OpenAPI (Swagger).
+The ELIES system provides a RESTful API documented using OpenAPI (Swagger).
 
 ## Interactive Documentation
 
