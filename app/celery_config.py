@@ -23,7 +23,7 @@ result_backend = f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB + 1}"
 
 # Create Celery app
 celery_app = Celery(
-    "elis_tasks",
+    "elies_tasks",
     broker=broker_url,
     backend=result_backend,
     include=[

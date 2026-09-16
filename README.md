@@ -1,12 +1,12 @@
 
 <div align="center">
 <pre>
-███████╗  ██╗       ██╗  ███████╗
-██╔════╝  ██║       ██║  ██╔════╝
-█████╗    ██║       ██║  ███████╗
-██╔══╝    ██║       ██║  ╚════██║
-███████╗  ███████╗  ██║  ███████║
-╚══════╝  ╚══════╝  ╚═╝  ╚══════╝
+███████╗  ██╗       ██╗  ███████╗  ███████╗
+██╔════╝  ██║       ██║  ██╔════╝  ██╔════╝
+█████╗    ██║       ██║  █████╗    ███████╗
+██╔══╝    ██║       ██║  ██╔══╝    ╚════██║
+███████╗  ███████╗  ██║  ███████╗  ███████║
+╚══════╝  ╚══════╝  ╚═╝  ╚══════╝  ╚══════╝
 Scientific Integrity System
 </pre>
 </div>
@@ -20,9 +20,9 @@ Scientific Integrity System
 
 </div>
 
-# ELIS - Scientific Integrity System
+# ELIES - Scientific Integrity System
 
-**ELIS** is a **FOREVER FREE AND OPEN-SOURCE** system designed to analyze the integrity of scientific data.
+**ELIES** is a **FOREVER FREE AND OPEN-SOURCE** system designed to analyze the integrity of scientific data.
 
 Our goal is to democratize access to advanced forensic tools, empowering researchers and integrity officers with robust and transparent tools to ensure the integrity of scientific records.
 
@@ -37,12 +37,12 @@ https://github.com/user-attachments/assets/f23e7ad3-1dbd-46d5-b5c5-5b897fd4a88b
 
 ## Getting Started
 
-To get ELIS running on your machine, you will need [Docker Compose](https://docs.docker.com/compose/) and [Node.js](https://nodejs.org/).
+To get ELIES running on your machine, you will need [Docker Compose](https://docs.docker.com/compose/) and [Node.js](https://nodejs.org/).
 
 #### 1. Clone the repository and submodules
 ```bash
-git clone --recurse-submodules git@github.com:researchintegrity/elis.git
-cd elis
+git clone --recurse-submodules git@github.com:researchintegrity/elies.git
+cd elies
 git submodule update --init --remote # ensure latest submodule versions
 
 ```
@@ -51,7 +51,7 @@ git submodule update --init --remote # ensure latest submodule versions
 ```bash
 cp .env.example .env
 # Edit .env to set the HOST_WORKSPACE_PATH
-# >> HOST_WORKSPACE_PATH=<path/to-current-dir>/elis/system_modules/elis-frontend/workspace
+# >> HOST_WORKSPACE_PATH=<path/to-current-dir>/elies/system_modules/elies-frontend/workspace
 ```
 
 #### 2. Build the tools
@@ -72,7 +72,7 @@ docker compose -f docker-compose-prod.yml up -d --scale workers=5
 
 #### 4. Launch the frontend
 ```bash
-cd system_modules/elis-frontend
+cd system_modules/elies-frontend
 npm install
 npm run dev
 ```
@@ -83,11 +83,24 @@ After instalation, visit **[http://localhost:5173](http://localhost:5173)** to s
 > **Need more details?**
 > Check our [Technical Overview](docs/TECHNICAL_OVERVIEW.md) for a deep dive into the architecture, manual installation, and API documentation.
 
+### Upgrading from ELIS
+
+The project was previously spelled **ELIS**. If you already run an older checkout:
+
+- **Database**: the default database name is now `elies_system`. To keep your existing data, either set `DATABASE_NAME=elis_system` in your `.env`, or migrate it:
+  ```bash
+  mongodump --db elis_system --archive=elis.archive
+  mongorestore --archive=elis.archive --nsFrom 'elis_system.*' --nsTo 'elies_system.*'
+  ```
+- **Docker network**: run `docker compose down` *before* pulling, so the old `elis_network` is removed.
+- **Frontend path**: the frontend submodule moved to `system_modules/elies-frontend`. Run `git submodule sync && git submodule update --init`, move your existing `workspace/` folder there, and update `HOST_WORKSPACE_PATH` in `.env`.
+- **Clone folder**: Docker Compose prefixes volume names (including MongoDB data) with the folder name. If you rename your existing clone folder (e.g. `elis` or `elis-backend`), set `COMPOSE_PROJECT_NAME` to the old folder name to keep using the existing volumes.
+
 ---
 
 ## Implemented Modules
 
-ELIS integrates multiple specialized modules to detect manipulation.
+ELIES integrates multiple specialized modules to detect manipulation.
 
 | Module | Description | Status |
 | :--- | :--- | :--- |
@@ -103,10 +116,10 @@ ELIS integrates multiple specialized modules to detect manipulation.
 ## TODOs
 
 - [ ] Documentation
-- [ ] UI/UX Improvement (check the [front-end issues](https://github.com/researchintegrity/elis-frontend/issues))
+- [ ] UI/UX Improvement (check the [front-end issues](https://github.com/researchintegrity/elies-frontend/issues))
 - [ ] AI-image detection module
 - [ ] AI-text detection module
-- [ ] OpenAlex API linked to ELIS
+- [ ] OpenAlex API linked to ELIES
 
 Found a bug or want a new feature, please contribute by opening a new issue!
 
@@ -125,9 +138,9 @@ Learn more about her work at her blog: [Science Integrity Digest](https://scienc
 
 ## License
 
-**ELIS** is open-source software licensed under the **AGPLv3 License**.
+**ELIES** is open-source software licensed under the **AGPLv3 License**.
 
-> **Note**: Each module integrated into ELIS has its own licensing terms. Some components may have restrictions on commercial use. Please check the `LICENSE` file in each individual module for specific details.
+> **Note**: Each module integrated into ELIES has its own licensing terms. Some components may have restrictions on commercial use. Please check the `LICENSE` file in each individual module for specific details.
 
 ---
 

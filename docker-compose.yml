@@ -27,7 +27,7 @@ services:
       - ${HOST_WORKSPACE_PATH}:${CONTAINER_WORKSPACE_PATH}
     command: uvicorn app.main:app --host 0.0.0.0 --port ${API_PORT:-8000} --reload
     networks:
-      - elis_network
+      - elies_network
       - milvus # Connect to CBIR/Milvus network for inter-service communication
 
   # Redis Message Broker
@@ -43,7 +43,7 @@ services:
       timeout: 3s
       retries: 5
     networks:
-      - elis_network
+      - elies_network
 
   # MongoDB Database (unauthenticated for local development)
   mongo:
@@ -63,7 +63,7 @@ services:
     logging:
       driver: "none"
     networks:
-      - elis_network
+      - elies_network
 
   # Celery Worker 1
   worker_1:
@@ -91,7 +91,7 @@ services:
     command: celery -A app.celery_config worker -l info -n worker1@%h -c 1
     restart: unless-stopped
     networks:
-      - elis_network
+      - elies_network
       - milvus # Connect to CBIR/Milvus network for inter-service communication
 
   # Celery Worker 2
@@ -120,7 +120,7 @@ services:
     command: celery -A app.celery_config worker -l info -n worker2@%h -c 1
     restart: unless-stopped
     networks:
-      - elis_network
+      - elies_network
       - milvus # Connect to CBIR/Milvus network for inter-service communication
 
   # Provenance Analysis Service
@@ -140,7 +140,7 @@ services:
       - REMOTE_DATA_PATH=${CONTAINER_WORKSPACE_PATH}
       - PROVENANCE_SERVICE_PORT=${PROVENANCE_SERVICE_PORT:-8000}
     networks:
-      - elis_network
+      - elies_network
       - milvus
 
   flower:
@@ -154,7 +154,7 @@ services:
       - redis
     command: celery --broker=redis://redis:6379/0 flower --port=5555
     networks:
-      - elis_network
+      - elies_network
 
   # ============================================================================
   # CBIR SYSTEM SERVICES
@@ -256,7 +256,7 @@ services:
     depends_on:
       - milvus-standalone
     networks:
-      - elis_network
+      - elies_network
       - milvus
 
   # ============================================================================
@@ -318,7 +318,7 @@ volumes:
     driver: local
 
 networks:
-  elis_network:
+  elies_network:
     driver: bridge
   milvus:
     driver: bridge

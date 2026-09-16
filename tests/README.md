@@ -1,12 +1,12 @@
 """
 README for User Operations Test Suite
 
-This test suite covers complete user workflows for the ELIS User Management System.
+This test suite covers complete user workflows for the ELIES User Management System.
 """
 
 # User Operations Test Suite
 
-This comprehensive test suite validates user registration, login, and deletion operations in the ELIS User Management System.
+This comprehensive test suite validates user registration, login, and deletion operations in the ELIES User Management System.
 
 ## Test Coverage
 
@@ -53,7 +53,7 @@ pip install -r requirements.txt
 ```
 
 ### Configuration
-The test suite uses a separate test database (`elis_system_test`) to avoid affecting production data.
+The test suite uses a separate test database (`elies_system_test`) to avoid affecting production data.
 
 Override test database location by setting environment variables:
 ```bash
@@ -121,7 +121,7 @@ tests/test_user_operations.py::TestUserOperationsIntegration::test_complete_user
 
 ## Important Notes
 
-1. **Test Database**: Tests use a separate test database (`elis_system_test`), automatically dropped after each test session.
+1. **Test Database**: Tests use a separate test database (`elies_system_test`), automatically dropped after each test session.
 2. **Isolation**: Each test function gets a clean `users` collection to ensure test independence.
 3. **Authentication**: Tests validate JWT token generation and validation.
 4. **Password Security**: Tests verify password hashing and validation.

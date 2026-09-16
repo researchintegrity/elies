@@ -1,6 +1,6 @@
-# ELIS Scientific Image Analysis System
+# ELIES Scientific Image Analysis System
 
-ELIS is an open-source scientific document and image integrity analysis system.
+ELIES is an open-source scientific document and image integrity analysis system.
 
 ## Features
 
@@ -17,7 +17,7 @@ ELIS is an open-source scientific document and image integrity analysis system.
 ## Project Structure
 
 ```
-elis-system/
+elies/
 ├── app/
 │   ├── main.py                      # FastAPI application
 │   ├── schemas.py                   # Pydantic validation models
@@ -73,7 +73,7 @@ elis-system/
 
 ## System Modules
 
-The ELIS system integrates several specialized analysis modules, each implemented as a separate repository in the same GitHub organization (`researchintegrity`). These modules provide the core AI/ML capabilities for scientific image and document analysis.
+The ELIES system integrates several specialized analysis modules, each implemented as a separate repository in the same GitHub organization (`researchintegrity`). These modules provide the core AI/ML capabilities for scientific image and document analysis.
 
 ### Available Modules
 
@@ -121,7 +121,7 @@ The easiest way to get the system running is with Docker Compose. This starts al
 
 ```bash
 git clone <repository-url>
-cd elis-system
+cd elies
 ```
 
 2. **Build the Tool Images (First Time Only)**:
@@ -186,7 +186,7 @@ If you prefer to run services locally without Docker, follow these steps:
 
 ```bash
 git clone <repository-url>
-cd elis-system
+cd elies
 ```
 
 2. Create and activate a virtual environment:
@@ -612,7 +612,7 @@ Authorization: Bearer <access_token>
 
 ### System Overview
 
-The ELIS system uses a distributed architecture with separate services for web APIs, background processing, and data storage:
+The ELIES system uses a distributed architecture with separate services for web APIs, background processing, and data storage:
 
 ```
 ┌─────────────────┐
@@ -764,7 +764,7 @@ Test fixtures automatically:
 
 ```env
 MONGODB_URL=mongodb://localhost:27017
-DATABASE_NAME=elis_system
+DATABASE_NAME=elies_system
 JWT_SECRET=your-secret-key-here
 JWT_ALGORITHM=HS256
 JWT_EXPIRATION_HOURS=24

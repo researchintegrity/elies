@@ -1,4 +1,4 @@
-# 2025 ELIS System Requirements
+# 2025 ELIES System Requirements
 # Core Web Framework
 fastapi[standard]==0.121.1
 uvicorn[standard]==0.38.0

@@ -1,1 +1,1 @@
-"""ELIS User Management System - Database package"""
+"""ELIES User Management System - Database package"""

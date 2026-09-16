@@ -1,5 +1,5 @@
 """
-Custom exceptions for ELIS backend.
+Custom exceptions for ELIES backend.
 
 This module provides a hierarchy of domain-specific exceptions that are
 automatically converted to HTTP responses by FastAPI exception handlers.
@@ -16,9 +16,9 @@ Usage:
 from typing import Optional
 
 
-class ELISException(Exception):
+class ELIESException(Exception):
     """
-    Base exception for all ELIS application errors.
+    Base exception for all ELIES application errors.
     
     All custom exceptions inherit from this class.
     The exception handler in main.py converts these to HTTP responses.
@@ -37,7 +37,7 @@ class ELISException(Exception):
         return self.message
 
 
-class ValidationError(ELISException):
+class ValidationError(ELIESException):
     """
     Invalid input or request data (HTTP 400).
     
@@ -61,7 +61,7 @@ class ValidationError(ELISException):
         super().__init__(message)
 
 
-class ResourceNotFoundError(ELISException):
+class ResourceNotFoundError(ELIESException):
     """
     Requested resource does not exist (HTTP 404).
     
@@ -90,7 +90,7 @@ class ResourceNotFoundError(ELISException):
             super().__init__(f"{resource_type} not found")
 
 
-class AuthorizationError(ELISException):
+class AuthorizationError(ELIESException):
     """
     User is not authorized to perform action (HTTP 403).
     
@@ -107,7 +107,7 @@ class AuthorizationError(ELISException):
         super().__init__(message)
 
 
-class StorageQuotaExceededError(ELISException):
+class StorageQuotaExceededError(ELIESException):
     """
     User has exceeded storage quota (HTTP 413).
     
@@ -144,7 +144,7 @@ class StorageQuotaExceededError(ELISException):
             super().__init__("Storage quota exceeded")
 
 
-class ExternalServiceError(ELISException):
+class ExternalServiceError(ELIESException):
     """
     External service (Docker, CBIR, etc.) failed (HTTP 502).
     
@@ -164,7 +164,7 @@ class ExternalServiceError(ELISException):
             super().__init__(f"{service_name} service unavailable")
 
 
-class ConflictError(ELISException):
+class ConflictError(ELIESException):
     """
     Resource conflict (HTTP 409).
     
@@ -180,7 +180,7 @@ class ConflictError(ELISException):
         super().__init__(message)
 
 
-class FileOperationError(ELISException):
+class FileOperationError(ELIESException):
     """
     File system operation failed (HTTP 500).
     
