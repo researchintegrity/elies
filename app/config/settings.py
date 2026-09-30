@@ -182,7 +182,7 @@ DEFAULT_THUMBNAIL_SIZE = (300, 300)  # Max width x height in pixels
 THUMBNAIL_JPEG_QUALITY = 85  # JPEG quality (1-100)
 
 # Password hashing settings
-BCRYPT_ROUNDS = 12  # bcrypt cost factor
+BCRYPT_ROUNDS = int(os.getenv("BCRYPT_ROUNDS", "12"))  # bcrypt cost factor (tests lower it for speed)
 
 # ============================================================================
 # UTILITY FUNCTIONS
