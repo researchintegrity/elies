@@ -6,8 +6,9 @@ from datetime import datetime
 
 from app.celery_config import celery_app
 from app.config.settings import CELERY_MAX_RETRIES
-from app.schemas import JobType
+from app.schemas import AnalysisType, JobType
 from app.tasks.lifecycle import TrackedJob, run_analysis
+from app.utils.file_storage import analysis_output_dir
 from app.utils.docker_trufor import run_trufor_detection_with_docker
 
 logger = logging.getLogger(__name__)
@@ -66,4 +67,5 @@ def detect_trufor(
             stored["noiseprint"] = results["noiseprint"]
         return True, message, stored
 
-    return run_analysis(self, job, "Starting TruFor detection...", work)
+    return run_analysis(self, job, "Starting TruFor detection...", work,
+                        output_dir=analysis_output_dir(user_id, analysis_id, AnalysisType.TRUFOR))

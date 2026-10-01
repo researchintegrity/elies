@@ -13,9 +13,10 @@ from app.config.settings import CELERY_MAX_RETRIES, convert_host_path_to_contain
 from app.db.mongodb import get_documents_collection, get_images_collection
 from app.schemas import JobType
 from app.services.deletion_service import delete_images, remove_file
+from app.services.storage_service import track_writes
 from app.tasks.cbir import cbir_index_batch
 from app.tasks.lifecycle import TrackedJob, handle_task_exception
-from app.utils.file_storage import figure_extraction_hook, get_extraction_output_path, update_user_storage_in_db
+from app.utils.file_storage import figure_extraction_hook, get_extraction_output_path
 from app.utils.metadata_parser import (
     extract_exif_metadata,
     is_pdf_extraction_filename,
@@ -138,9 +139,10 @@ def extract_images_from_document(self, doc_id: str, user_id: str, pdf_path: str,
         _discard_previous_attempt(doc_id, user_id)
 
         job.progress(30, "Running PDF extraction...")
-        extracted_count, extraction_errors, extracted_files = figure_extraction_hook(
-            doc_id=doc_id, user_id=user_id, pdf_file_path=pdf_path
-        )
+        with track_writes(user_id, get_extraction_output_path(user_id, doc_id)):
+            extracted_count, extraction_errors, extracted_files = figure_extraction_hook(
+                doc_id=doc_id, user_id=user_id, pdf_file_path=pdf_path
+            )
 
         job.progress(60, "Processing extracted images...")
         registered, register_errors = _register_extracted_images(doc_id, user_id, extracted_files)
@@ -165,7 +167,6 @@ def extract_images_from_document(self, doc_id: str, user_id: str, pdf_path: str,
             "extraction_completed_at": datetime.utcnow(),
         }},
     )
-    update_user_storage_in_db(user_id)
 
     if extraction_status == "failed":
         job.fail("; ".join(errors))

@@ -39,6 +39,8 @@ from app.schemas import (
     JobType,
     JobStatus,
 )
+from app.services.deletion_service import delete_images
+from app.services.storage_service import add_storage, path_size
 from app.services.image_service import (
     build_image_query,
     delete_image_and_artifacts,
@@ -57,7 +59,6 @@ from app.tasks.cbir import cbir_index_image, cbir_update_labels, cbir_index_batc
 from app.utils.docker_cbir import check_cbir_health
 from app.utils.file_storage import (
     get_thumbnail_path,
-    update_user_storage_in_db,
 )
 from app.utils.security import get_current_user, get_current_user_media
 
@@ -82,11 +83,8 @@ def _require_cbir_available() -> None:
 
 def _discard_new_images(image_ids: List[str], user_id: str) -> None:
     """Remove images created by the current request (records and files)."""
-    images_col = get_images_collection()
     oids = [ObjectId(image_id) for image_id in image_ids]
-    for img in images_col.find({"_id": {"$in": oids}, "user_id": user_id}, {"file_path": 1}):
-        Path(img["file_path"]).unlink(missing_ok=True)
-    images_col.delete_many({"_id": {"$in": oids}, "user_id": user_id})
+    delete_images(list(get_images_collection().find({"_id": {"$in": oids}, "user_id": user_id})))
 
 
 @router.post("/upload", response_model=ImageResponse, status_code=status.HTTP_201_CREATED)
@@ -116,7 +114,6 @@ def upload_image(
 
     img_record = save_uploaded_image(current_user, file.filename, file.file, document_id=document_id)
     image_id = str(img_record["_id"])
-    update_user_storage_in_db(user_id_str)
 
     try:
         cbir_index_image.delay(
@@ -193,7 +190,6 @@ def upload_images_batch(
             detail="No valid images could be uploaded"
         )
     new_image_ids = [img["image_id"] for img in uploaded_images]
-    update_user_storage_in_db(user_id_str)
 
     # Create job log entry for the jobs dashboard (tracks the batch upload)
     main_job_id = create_job_log(
@@ -232,7 +228,6 @@ def upload_images_batch(
     except Exception as e:
         logger.error(f"Failed to start batch indexing for user {user_id_str}: {e}")
         _discard_new_images(new_image_ids, user_id_str)
-        update_user_storage_in_db(user_id_str)
         complete_job(main_job_id, user_id_str, JobStatus.FAILED, errors=["Failed to queue indexing; upload rolled back"])
         get_indexing_jobs_collection().delete_one({"_id": job_id})
         raise HTTPException(
@@ -589,6 +584,7 @@ def get_image_thumbnail(
                 
                 # Save as JPEG with configured quality
                 image.save(thumb_path, "JPEG", quality=THUMBNAIL_JPEG_QUALITY)
+            add_storage(user_id_str, path_size(thumb_path))
                 
         except Exception as e:
             # If thumbnail generation fails, fallback to original (pass-through)

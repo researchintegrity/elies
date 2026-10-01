@@ -16,6 +16,7 @@ from app.config.settings import (
 )
 from app.schemas import JobType, JobStatus
 from app.services.job_logger import update_job_progress, complete_job
+from app.services.storage_service import add_storage
 from app.tasks.cbir import cbir_index_batch
 from app.tasks.lifecycle import TrackedJob, handle_task_exception
 
@@ -116,6 +117,7 @@ def extract_panels_from_images(
         logger.info(f"Panel extraction completed. Processing {panels_count} panels...")
 
         result_panel_ids = []
+        panel_bytes = 0
 
         for panel_info in panels_data:
             try:
@@ -129,6 +131,7 @@ def extract_panels_from_images(
                 # Insert into MongoDB
                 result = images_col.insert_one(panel_doc)
                 panel_mongodb_id = result.inserted_id
+                panel_bytes += panel_doc.get("file_size") or 0
                 panel_id_str = str(panel_mongodb_id)
                 result_panel_ids.append(panel_id_str)
 
@@ -213,6 +216,9 @@ def extract_panels_from_images(
                 error_msg = f"Error creating panel document for {panel_info.get('panel_id')}: {str(e)}"
                 logger.error(error_msg, exc_info=True)
                 # Continue processing other panels instead of failing entirely
+
+        # Panels are stored in the user's workspace and count against the quota
+        add_storage(user_id, panel_bytes)
 
         if not result_panel_ids:
             error_msg = "No panel documents were successfully created"

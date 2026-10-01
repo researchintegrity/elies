@@ -84,6 +84,9 @@ def main(argv=None) -> int:
     prom = sub.add_parser("promote", help="Give an existing user the admin role")
     prom.add_argument("--username", required=True)
 
+    sub.add_parser("reconcile-storage",
+                   help="Recompute every user's storage usage from disk (also run daily by Celery beat)")
+
     args = parser.parse_args(argv)
     try:
         if args.command == "create-admin":
@@ -100,6 +103,11 @@ def main(argv=None) -> int:
             print(f"Created administrator '{user['username']}' ({user['_id']})")
             if generated:
                 print(f"Generated password (shown once): {password}")
+        elif args.command == "reconcile-storage":
+            from app.services.storage_service import reconcile_all_storage
+
+            corrected = reconcile_all_storage()
+            print(f"Storage usage corrected for {len(corrected)} users")
         else:
             user = promote(args.username)
             print(f"'{user['username']}' now has roles: {', '.join(user['roles'])}")

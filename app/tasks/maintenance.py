@@ -1,5 +1,6 @@
 """
-Maintenance tasks: account deletion and reaping jobs abandoned by dead workers.
+Maintenance tasks: account deletion, reaping jobs abandoned by dead workers
+and reconciling storage usage with the disk.
 """
 import logging
 from datetime import datetime, timedelta
@@ -16,6 +17,7 @@ from app.db.mongodb import (
 from app.schemas import JobStatus
 from app.services.deletion_service import delete_user_account
 from app.services.job_logger import complete_job
+from app.services.storage_service import reconcile_all_storage
 
 logger = logging.getLogger(__name__)
 
@@ -79,3 +81,12 @@ def reap_stale_jobs(now: Optional[datetime] = None) -> Dict[str, int]:
 def reap_stale_jobs_task() -> Dict[str, int]:
     """Periodic task (Celery beat) wrapping reap_stale_jobs."""
     return reap_stale_jobs()
+
+
+@celery_app.task(name="tasks.reconcile_storage")
+def reconcile_storage_task() -> Dict[str, int]:
+    """
+    Periodic task (Celery beat): recompute every user's storage_used_bytes
+    from their workspace, correcting drift in the running totals (#71).
+    """
+    return reconcile_all_storage()

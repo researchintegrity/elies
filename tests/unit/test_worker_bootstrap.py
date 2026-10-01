@@ -22,6 +22,7 @@ EXPECTED_TASKS = {
     "tasks.extract_panels",
     "tasks.provenance_analysis",
     "tasks.reap_stale_jobs",
+    "tasks.reconcile_storage",
     "tasks.remove_watermark",
 }
 

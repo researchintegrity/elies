@@ -9,6 +9,8 @@ from datetime import datetime
 from bson import ObjectId
 from bson.errors import InvalidId
 
+from app.config.storage_quota import MAX_IMAGE_FILE_SIZE, format_bytes
+from app.exceptions import ValidationError
 from app.utils.security import get_current_user
 from app.db.mongodb import get_images_collection, get_analyses_collection
 from app.schemas import (
@@ -286,8 +288,12 @@ def search_by_upload(
     """
     user_id = str(current_user["_id"])
     
-    # Read uploaded file
-    image_data = file.file.read()
+    # Read the query image, refusing anything over the image size limit
+    image_data = file.file.read(MAX_IMAGE_FILE_SIZE + 1)
+    if not image_data:
+        raise ValidationError("File is empty.")
+    if len(image_data) > MAX_IMAGE_FILE_SIZE:
+        raise ValidationError(f"File too large. Maximum size is {format_bytes(MAX_IMAGE_FILE_SIZE)}.")
     
     # Perform search via upload endpoint
     success, message, results = search_similar_images_upload(

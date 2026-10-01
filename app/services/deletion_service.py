@@ -9,11 +9,13 @@ Rules (issue #65):
   image, its thumbnail, annotations, relationships, analyses (with their result
   folders) and its CBIR vectors.
 - Files are only deleted inside the workspace (UPLOAD_DIR).
+- The bytes freed are released from the owner's storage counter (issue #71).
 """
 import logging
 import shutil
+from collections import defaultdict
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional
 
 from bson import ObjectId
 
@@ -29,6 +31,7 @@ from app.db.mongodb import (
     get_single_annotations_collection,
     get_users_collection,
 )
+from app.services.storage_service import path_size, release_storage, workspace_owner
 from app.utils.file_storage import analysis_output_dir
 
 logger = logging.getLogger(__name__)
@@ -41,26 +44,64 @@ def _within_workspace(path: Path) -> bool:
         return False
 
 
-def remove_file(path: Optional[str]) -> None:
-    """Delete a workspace file; missing files and paths outside the workspace are skipped."""
+class FreedSpace:
+    """Bytes freed per user during one deletion, released in one update each."""
+
+    def __init__(self):
+        self.by_user: Dict[str, int] = defaultdict(int)
+
+    def add(self, path: Path, size: int) -> None:
+        owner = workspace_owner(path)
+        if owner and size:
+            self.by_user[owner] += size
+
+    def release(self) -> None:
+        for user_id, size in self.by_user.items():
+            release_storage(user_id, size)
+        self.by_user.clear()
+
+
+def remove_file(path: Optional[str], freed: Optional[FreedSpace] = None) -> int:
+    """
+    Delete a workspace file; missing files and paths outside the workspace are
+    skipped. The freed bytes are released from the owner's storage counter, or
+    recorded in ``freed`` for the caller to release. Returns the bytes freed.
+    """
     if not path:
-        return
+        return 0
     file_path = Path(path)
     if not _within_workspace(file_path):
         logger.warning("Not deleting file outside the workspace: %s", file_path)
-        return
+        return 0
+    size = path_size(file_path)
     try:
         file_path.unlink(missing_ok=True)
     except OSError as e:
         logger.warning("Could not delete file %s: %s", file_path, e)
+        return 0
+    _record_freed(file_path, size, freed)
+    return size
 
 
-def remove_tree(path: Path) -> None:
-    """Delete a workspace directory tree; missing directories are skipped."""
+def remove_tree(path: Path, freed: Optional[FreedSpace] = None) -> int:
+    """Delete a workspace directory tree (see remove_file). Returns the bytes freed."""
     if not _within_workspace(path) or path.resolve() == UPLOAD_DIR.resolve():
         logger.warning("Not deleting directory outside the workspace: %s", path)
-        return
+        return 0
+    size = path_size(path)
     shutil.rmtree(path, ignore_errors=True)
+    size -= path_size(path)  # whatever could not be deleted
+    _record_freed(path, size, freed)
+    return size
+
+
+def _record_freed(path: Path, size: int, freed: Optional[FreedSpace]) -> None:
+    if freed is not None:
+        freed.add(path, size)
+    else:
+        owner = workspace_owner(path)
+        if owner:
+            release_storage(owner, size)
 
 
 def _remove_dir_if_empty(path: Path) -> None:
@@ -86,7 +127,7 @@ def _queue_cbir_removal(images: Iterable[dict]) -> None:
             logger.warning("Failed to queue CBIR deletion for image %s: %s", img["_id"], e)
 
 
-def delete_analyses(analyses: List[dict]) -> int:
+def delete_analyses(analyses: List[dict], freed: Optional[FreedSpace] = None) -> int:
     """Delete analysis records, their result folders and their references on images."""
     if not analyses:
         return 0
@@ -97,11 +138,12 @@ def delete_analyses(analyses: List[dict]) -> int:
         {"analysis_ids": {"$in": id_strings}}, {"$pull": {"analysis_ids": {"$in": id_strings}}}
     )
     for analysis in analyses:
-        remove_tree(analysis_output_dir(analysis["user_id"], str(analysis["_id"]), str(analysis.get("type", ""))))
+        remove_tree(analysis_output_dir(analysis["user_id"], str(analysis["_id"]), str(analysis.get("type", ""))),
+                    freed)
     return len(analyses)
 
 
-def delete_images(images: List[dict]) -> dict:
+def delete_images(images: List[dict], freed: Optional[FreedSpace] = None) -> dict:
     """
     Delete images and everything derived from them (panels included).
 
@@ -134,14 +176,18 @@ def delete_images(images: List[dict]) -> dict:
         {"user_id": {"$in": list(user_ids)},
          "$or": [{"source_image_id": {"$in": ids}}, {"target_image_id": {"$in": ids}}]}
     ))
-    analyses_deleted = delete_analyses(analyses)
+    own_freed = freed is None
+    freed = freed or FreedSpace()
+    analyses_deleted = delete_analyses(analyses, freed)
     images_col.delete_many({"_id": {"$in": [ObjectId(i) for i in ids]}})
 
     for img in all_images:
-        remove_file(img.get("file_path"))
-        remove_file(str(thumbnail_path(img["user_id"], str(img["_id"]))))
+        remove_file(img.get("file_path"), freed)
+        remove_file(str(thumbnail_path(img["user_id"], str(img["_id"]))), freed)
     for image_id, img in by_id.items():
         _remove_dir_if_empty(UPLOAD_DIR / img["user_id"] / "images" / "panels" / image_id)
+    if own_freed:
+        freed.release()
 
     return {
         "images_deleted": len(all_images),
@@ -164,15 +210,17 @@ def delete_document(doc: dict) -> dict:
     images_col = get_images_collection()
 
     extracted = list(images_col.find({"document_id": doc_id, "user_id": user_id, "source_type": "extracted"}))
-    result = delete_images(extracted)
+    freed = FreedSpace()
+    result = delete_images(extracted, freed)
     images_col.update_many(
         {"document_id": doc_id, "user_id": user_id, "source_type": {"$ne": "extracted"}},
         {"$set": {"document_id": None}},
     )
     get_documents_collection().delete_one({"_id": doc["_id"]})
 
-    remove_file(doc.get("file_path"))
-    remove_tree(UPLOAD_DIR / user_id / "images" / "extracted" / doc_id)
+    remove_file(doc.get("file_path"), freed)
+    remove_tree(UPLOAD_DIR / user_id / "images" / "extracted" / doc_id, freed)
+    freed.release()
     result["deleted_id"] = doc_id
     return result
 

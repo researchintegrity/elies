@@ -22,7 +22,6 @@ from app.schemas import JobType, JobStatus
 from app.services.job_logger import create_job_log, complete_job
 from app.services.deletion_service import delete_images
 from app.services.resource_helpers import get_owned_resource
-from app.utils.file_storage import update_user_storage_in_db
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +57,6 @@ def delete_image_and_artifacts(
 
     try:
         result = delete_images([img])
-        update_user_storage_in_db(user_id)
     except Exception as e:
         complete_job(job_id=job_id, user_id=user_id, status=JobStatus.FAILED, errors=[str(e)])
         raise

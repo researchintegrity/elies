@@ -140,6 +140,18 @@ def test_watermark_output_is_staged_then_moved(monkeypatch):
     assert not os.listdir(Path(pdf).parent / ".watermark-staging")
 
 
+def test_watermark_output_is_stored_under_the_new_document_id(monkeypatch):
+    pdf = _file(UPLOAD_DIR / "u1" / "pdfs" / "d11.pdf", PDF_BYTES)
+    fake = FakeRunner(produce=lambda out, args: (out["/output"] / args[args.index("-o") + 1].split("/")[-1]).write_bytes(PDF_BYTES))
+    monkeypatch.setattr(watermark, "run_tool_container", fake)
+
+    ok, message, info = watermark.remove_watermark_with_docker("d11", "u1", pdf, aggressiveness_mode=2, output_id="abc123")
+
+    assert ok, message
+    assert Path(info["path"]).name == "abc123.pdf" and Path(info["path"]).exists()
+    assert info["filename"] == "d11_watermark_removed_m2.pdf"
+
+
 def test_watermark_failure_leaves_no_staging(monkeypatch):
     pdf = _file(UPLOAD_DIR / "u1" / "pdfs" / "d10.pdf", PDF_BYTES)
     monkeypatch.setattr(watermark, "run_tool_container", FakeRunner(returncode=3))

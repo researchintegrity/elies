@@ -1514,7 +1514,11 @@ class RelationshipGraphResponse(BaseModel):
     )
     total_nodes_count: int = Field(
         default=0,
-        description="Total number of nodes in the full connected graph (unlimited depth)"
+        description="Number of nodes in the connected graph (unlimited depth, capped at RELATIONSHIP_GRAPH_MAX_NODES)"
+    )
+    truncated: bool = Field(
+        default=False,
+        description="True if exploration stopped at RELATIONSHIP_GRAPH_MAX_NODES"
     )
 
     class Config:

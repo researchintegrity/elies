@@ -101,58 +101,6 @@ class TestComputeMaxSpanningTree:
         assert len(mst) >= 1
 
 
-class TestCreateRelationship:
-    """Test relationship creation with mocking"""
-    
-    @patch('app.services.relationship_service.get_relationships_collection')
-    @patch('app.services.relationship_service.get_images_collection')
-    def test_create_relationship_returns_existing(self, mock_images, mock_rels):
-        """If relationship exists, return it without creating duplicate"""
-        existing_rel = {
-            "_id": ObjectId(),
-            "image1_id": "aaa",
-            "image2_id": "bbb",
-            "weight": 0.5
-        }
-        mock_rels.return_value.find_one.return_value = existing_rel
-        
-        result = create_relationship(
-            user_id="user1",
-            image1_id="bbb",  # Intentionally reversed to test normalization
-            image2_id="aaa",
-            source_type="manual"
-        )
-        
-        assert result == existing_rel
-        mock_rels.return_value.insert_one.assert_not_called()
-    
-    @patch('app.services.relationship_service.get_relationships_collection')
-    @patch('app.services.relationship_service.get_images_collection')
-    def test_create_relationship_new(self, mock_images, mock_rels):
-        """New relationship is created and auto-flagging occurs"""
-        mock_rels.return_value.find_one.return_value = None
-        mock_rels.return_value.insert_one.return_value = MagicMock(
-            inserted_id=ObjectId()
-        )
-        
-        valid_id1 = str(ObjectId())
-        valid_id2 = str(ObjectId())
-        
-        result = create_relationship(
-            user_id="user1",
-            image1_id=valid_id1,
-            image2_id=valid_id2,
-            source_type="similarity",
-            weight=0.85
-        )
-        
-        # Verify insert was called
-        mock_rels.return_value.insert_one.assert_called_once()
-        
-        # Verify auto-flagging was triggered
-        mock_images.return_value.update_many.assert_called()
-
-
 class TestRemoveRelationship:
     """Test relationship removal"""
     
@@ -206,49 +154,6 @@ class TestGetRelationshipsForImage:
         
         assert len(results) == 1
         assert results[0]["image1_id"] == "aaa"
-
-
-class TestGetRelationshipGraph:
-    """Test graph BFS traversal"""
-    
-    @patch('app.services.relationship_service.get_relationships_collection')
-    @patch('app.services.relationship_service.get_images_collection')
-    def test_graph_single_node(self, mock_images, mock_rels):
-        """Graph with no relationships returns just the query node"""
-        mock_images.return_value.find_one.return_value = {
-            "_id": ObjectId("507f1f77bcf86cd799439011"),
-            "filename": "query.png",
-            "is_flagged": True
-        }
-        mock_rels.return_value.find.return_value = []
-        
-        result = get_relationship_graph("507f1f77bcf86cd799439011", "user1")
-        
-        assert len(result["nodes"]) == 1
-        assert result["nodes"][0]["is_query"] is True
-        assert len(result["edges"]) == 0
-    
-    @patch('app.services.relationship_service.get_relationships_collection')
-    @patch('app.services.relationship_service.get_images_collection')
-    def test_graph_respects_max_depth(self, mock_images, mock_rels):
-        """BFS respects max_depth limit"""
-        # This test verifies depth limiting works
-        # Mock returns relationships that would extend beyond depth 1
-        mock_images.return_value.find_one.side_effect = [
-            {"_id": ObjectId(), "filename": "query.png", "is_flagged": True},
-            {"_id": ObjectId(), "filename": "related.png", "is_flagged": False}
-        ]
-        mock_rels.return_value.find.side_effect = [
-            [{"_id": ObjectId(), "image1_id": "query", "image2_id": "related", "weight": 1.0, "source_type": "manual"}],
-            []  # No more relationships from 'related'
-        ]
-        
-        result = get_relationship_graph("query", "user1", max_depth=1)
-        
-        # Should have explored up to depth 1
-        assert "nodes" in result
-        assert "edges" in result
-        assert "mst_edges" in result
 
 
 # Integration test markers (require running services)

@@ -23,7 +23,9 @@ from fastapi.testclient import TestClient
 from app.main import app
 
 from app.db.mongodb import get_documents_collection, get_images_collection, db_connection
-from app.utils.file_storage import UPLOAD_DIR, delete_directory
+import shutil
+
+from app.config.settings import UPLOAD_DIR
 from app.config.storage_quota import MAX_IMAGE_FILE_SIZE, MAX_PDF_FILE_SIZE
 
 # Configuration
@@ -203,11 +205,7 @@ def cleanup_workspace():
     if UPLOAD_DIR.exists():
         for child in UPLOAD_DIR.iterdir():
             if child.is_dir():
-                try:
-                    delete_directory(str(child))
-                except Exception:
-                    # If deletion fails, the workspace was already clean or error occurred, just pass
-                    pass
+                shutil.rmtree(child, ignore_errors=True)
 
 
 @pytest.fixture(autouse=True)

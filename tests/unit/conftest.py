@@ -52,6 +52,7 @@ def mock_db(monkeypatch):
     monkeypatch.setattr(mongodb.db_connection, "_client", client)
     monkeypatch.setattr(mongodb.db_connection, "_db", db)
     monkeypatch.setattr(mongodb.db_connection, "connect", lambda: None)
+    mongodb.ensure_indexes(db)
     yield db
 
 

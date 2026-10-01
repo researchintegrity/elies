@@ -12,6 +12,7 @@ from app.celery_config import celery_app
 from app.config.settings import CELERY_MAX_RETRIES
 from app.schemas import AnalysisType, JobType
 from app.tasks.lifecycle import TrackedJob, run_analysis
+from app.utils.file_storage import analysis_output_dir
 from app.utils.docker_copy_move import run_copy_move_detection_with_docker
 
 logger = logging.getLogger(__name__)
@@ -74,7 +75,8 @@ def detect_copy_move(
         )
         return success, message, _result_document(method, dense_method, results) if success else None
 
-    return run_analysis(self, job, "Running detection algorithm...", work)
+    return run_analysis(self, job, "Running detection algorithm...", work,
+                        output_dir=analysis_output_dir(user_id, analysis_id, AnalysisType.SINGLE_IMAGE_COPY_MOVE))
 
 
 @celery_app.task(bind=True, max_retries=CELERY_MAX_RETRIES, name="tasks.detect_copy_move_cross")
@@ -128,4 +130,5 @@ def detect_copy_move_cross(
             return False, message, None
         return True, message, _result_document(method, dense_method, results, descriptor)
 
-    return run_analysis(self, job, "Running cross-image detection...", work)
+    return run_analysis(self, job, "Running cross-image detection...", work,
+                        output_dir=analysis_output_dir(user_id, analysis_id, AnalysisType.CROSS_IMAGE_COPY_MOVE))

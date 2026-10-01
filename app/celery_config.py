@@ -2,7 +2,7 @@
 Celery configuration for async task processing
 """
 from celery import Celery
-from celery.signals import worker_ready
+from celery.signals import worker_process_init, worker_ready
 from app.config.settings import (
     CELERY_BROKER_URL,
     CELERY_RESULT_BACKEND,
@@ -66,6 +66,7 @@ celery_app.conf.update(
     # Periodic maintenance, run by the 'beat' service in docker compose
     beat_schedule={
         "reap-stale-jobs": {"task": "tasks.reap_stale_jobs", "schedule": 600.0},
+        "reconcile-storage": {"task": "tasks.reconcile_storage", "schedule": 86400.0},
     },
 )
 
@@ -76,3 +77,14 @@ def kill_orphaned_tool_containers(**kwargs):
     from app.utils.docker_runner import kill_orphaned_containers
 
     kill_orphaned_containers()
+
+
+@worker_process_init.connect
+def reset_database_connection(**kwargs):
+    """
+    Each forked worker process opens its own MongoDB connection (creating
+    indexes on first use): a MongoClient must not be shared across fork.
+    """
+    from app.db.mongodb import db_connection
+
+    db_connection.reset()

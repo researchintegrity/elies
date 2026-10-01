@@ -9,7 +9,9 @@ Shared lifecycle handling for Celery tasks (issue #68).
 - Any other exception is a bug or a permanent failure: it fails the task.
 """
 import logging
+from contextlib import nullcontext
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from bson import ObjectId
@@ -22,6 +24,7 @@ from app.db.mongodb import get_analyses_collection
 from app.exceptions import TransientError
 from app.schemas import AnalysisStatus, JobStatus, JobType
 from app.services.job_logger import complete_job, create_job_log, update_job_progress
+from app.services.storage_service import track_writes
 
 logger = logging.getLogger(__name__)
 
@@ -129,15 +132,19 @@ def handle_task_exception(task, exc: BaseException, job: TrackedJob,
 
 def run_analysis(task, job: TrackedJob, start_message: str,
                  work: Callable[[], Tuple[bool, str, Optional[Dict[str, Any]]]],
-                 output_data: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None) -> Dict[str, Any]:
+                 output_data: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None,
+                 output_dir: Optional[Path] = None) -> Dict[str, Any]:
     """
     Run ``work`` for an analysis task: ``work`` returns (success, message,
     results). Results are stored on the analysis on success; the failure
     message otherwise. Exceptions go through handle_task_exception.
+
+    Files written to ``output_dir`` count against the user's storage quota.
     """
     try:
         job.start(start_message)
-        success, message, results = work()
+        with track_writes(job.user_id, output_dir) if output_dir else nullcontext():
+            success, message, results = work()
     except BaseException as exc:  # noqa: BLE001 - re-raised by handle_task_exception
         handle_task_exception(task, exc, job)
 

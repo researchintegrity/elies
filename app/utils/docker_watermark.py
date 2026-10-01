@@ -5,7 +5,7 @@ import logging
 import os
 import shutil
 import uuid
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 from app.config.settings import (
     PDF_WATERMARK_REMOVAL_DOCKER_IMAGE,
@@ -23,13 +23,16 @@ def remove_watermark_with_docker(
     user_id: str,
     pdf_file_path: str,
     aggressiveness_mode: int = 2,
-    docker_image: str = None
+    docker_image: str = None,
+    output_id: Optional[str] = None,
 ) -> Tuple[bool, str, Dict]:
     """Remove watermarks from a PDF using the pdf-watermark-removal container.
 
     The original PDF's directory is mounted read-only; the tool writes into a
     private staging directory, and the cleaned PDF is then moved next to the
-    original as ``<name>_watermark_removed_m<mode>.pdf``.
+    original as ``<output_id>.pdf`` (the id of the document record that will
+    reference it, so every run gets its own file) or, without ``output_id``,
+    as ``<name>_watermark_removed_m<mode>.pdf``.
 
     Args:
         doc_id: Document ID for tracking
@@ -38,6 +41,7 @@ def remove_watermark_with_docker(
         aggressiveness_mode: 1 (explicit watermarks), 2 (text + repeated
             graphics, default) or 3 (all graphics)
         docker_image: Override the configured image
+        output_id: Name the stored file after this id
 
     Returns:
         Tuple of (success, status_message, output_file_info) where
@@ -78,7 +82,7 @@ def remove_watermark_with_docker(
             reason = run.describe_failure() if not run.ok else "no output file produced"
             return False, f"Watermark removal failed ({reason})", output_file_info
 
-        final_path = os.path.join(pdf_dir, output_filename)
+        final_path = os.path.join(pdf_dir, f"{output_id}.pdf" if output_id else output_filename)
         shutil.move(staged_output, final_path)
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)

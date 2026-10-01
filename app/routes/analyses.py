@@ -661,10 +661,17 @@ def save_screening_tool_analysis(
         The created analysis document
     """
     import json
-    from app.utils.file_storage import get_analysis_output_path
-    
+    from app.config.storage_quota import MAX_IMAGE_FILE_SIZE
+    from app.services.upload_service import (
+        discard_stored_file,
+        display_filename,
+        store_upload,
+        verify_image_file,
+    )
+    from app.utils.file_storage import ALLOWED_IMAGE_EXTENSIONS, get_analysis_output_path
+
     user_id_str = str(current_user["_id"])
-    
+
     # Verify ownership of the image
     get_owned_resource(
         get_images_collection,
@@ -672,7 +679,7 @@ def save_screening_tool_analysis(
         user_id_str,
         "Image"
     )
-    
+
     # Parse parameters JSON
     try:
         params_dict = json.loads(parameters)
@@ -681,64 +688,55 @@ def save_screening_tool_analysis(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid JSON in parameters field"
         )
-    
+    if not isinstance(params_dict, dict):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="parameters must be a JSON object"
+        )
+
     # Add subtype to parameters for clarity
     params_dict["analysis_subtype"] = analysis_subtype
-    
-    # Create analysis document
-    analyses_col = get_analyses_collection()
+
+    analysis_oid = ObjectId()
+    analysis_id = str(analysis_oid)
+    now = datetime.utcnow()
     analysis_doc = {
+        "_id": analysis_oid,
         "type": AnalysisType.SCREENING_TOOL,
         "user_id": user_id_str,
         "source_image_id": image_id,
         "status": AnalysisStatus.COMPLETED,  # Screening tool analyses are already completed
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "created_at": now,
+        "updated_at": now,
         "parameters": params_dict,
         "results": {
-            "timestamp": datetime.utcnow(),
+            "timestamp": now,
             "analysis_subtype": analysis_subtype,
             "notes": notes
         }
     }
-    
-    result = analyses_col.insert_one(analysis_doc)
-    analysis_id = str(result.inserted_id)
-    
-    # Handle optional result image upload
+
+    # Optional result image: validated like any image upload and counted in
+    # the user's quota. The file name never comes from the client.
+    result_path, result_size = None, 0
     if result_image:
-        try:
-            # Read file content
-            content = result_image.file.read()
-            
-            # Get output directory for this analysis
-            output_dir = get_analysis_output_path(user_id_str, analysis_id, "screening_tool")
-            
-            # Generate filename
-            file_ext = Path(result_image.filename).suffix.lower() or ".png"
-            result_filename = f"result_{analysis_subtype}{file_ext}"
-            result_path = output_dir / result_filename
-            
-            # Save file
-            with open(result_path, "wb") as f:
-                f.write(content)
-            
-            # Update analysis with result file path
-            analyses_col.update_one(
-                {"_id": ObjectId(analysis_id)},
-                {
-                    "$set": {
-                        "results.result_image": str(result_path),
-                        "updated_at": datetime.utcnow()
-                    }
-                }
+        file_ext = Path(display_filename(result_image.filename)).suffix.lower() or ".png"
+        if file_ext not in ALLOWED_IMAGE_EXTENSIONS:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid result image type: {file_ext}"
             )
-            analysis_doc["results"]["result_image"] = str(result_path)
-        except Exception as e:
-            # Log error but don't fail the request - the analysis record is still valid
-            import logging
-            logging.error(f"Failed to save result image for screening tool analysis {analysis_id}: {e}")
-    
+        result_path = get_analysis_output_path(user_id_str, analysis_id, "screening_tool") / f"result{file_ext}"
+        result_size = store_upload(current_user, result_image.file, result_path, MAX_IMAGE_FILE_SIZE, verify_image_file)
+        analysis_doc["results"]["result_image"] = str(result_path)
+
+    try:
+        get_analyses_collection().insert_one(analysis_doc)
+    except BaseException:
+        if result_path:
+            discard_stored_file(user_id_str, result_path, result_size)
+        raise
+
     # Update Image document with analysis_id
     images_col = get_images_collection()
     images_col.update_one(

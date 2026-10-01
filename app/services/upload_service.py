@@ -11,24 +11,19 @@ import logging
 import warnings
 from datetime import datetime
 from pathlib import Path
-from typing import BinaryIO, Iterable, Optional
+from typing import BinaryIO, Callable, Iterable, Optional
 
 from bson import ObjectId
 from PIL import Image, UnidentifiedImageError
 
 from app.config.settings import MAX_IMAGE_PIXELS, convert_host_path_to_container
-from app.config.storage_quota import (
-    DEFAULT_USER_STORAGE_QUOTA,
-    MAX_IMAGE_FILE_SIZE,
-    MAX_PDF_FILE_SIZE,
-    format_bytes,
-)
+from app.config.storage_quota import MAX_IMAGE_FILE_SIZE, MAX_PDF_FILE_SIZE, format_bytes
 from app.db.mongodb import get_documents_collection, get_images_collection
-from app.exceptions import ResourceNotFoundError, StorageQuotaExceededError, ValidationError
+from app.exceptions import ResourceNotFoundError, ValidationError
+from app.services.storage_service import add_storage, release_storage, reserve_storage
 from app.utils.file_storage import (
     ALLOWED_IMAGE_EXTENSIONS,
     ALLOWED_PDF_EXTENSIONS,
-    check_storage_quota,
     get_user_upload_path,
 )
 from app.utils.metadata_parser import extract_exif_metadata
@@ -71,13 +66,6 @@ def _check_size(size: int, max_bytes: int) -> None:
         raise ValidationError(f"File too large. Maximum size is {format_bytes(max_bytes)}.")
 
 
-def _check_quota(user: dict, size: int) -> None:
-    quota = user.get("storage_limit_bytes", DEFAULT_USER_STORAGE_QUOTA)
-    ok, message = check_storage_quota(str(user["_id"]), size, quota)
-    if not ok:
-        raise StorageQuotaExceededError(message)
-
-
 def _copy_limited(stream: BinaryIO, dest: Path, max_bytes: int) -> int:
     """Copy a stream to ``dest`` in chunks, refusing to write more than ``max_bytes``."""
     written = 0
@@ -88,6 +76,49 @@ def _copy_limited(stream: BinaryIO, dest: Path, max_bytes: int) -> int:
                 raise ValidationError(f"File too large. Maximum size is {format_bytes(max_bytes)}.")
             out.write(chunk)
     _check_size(written, max_bytes)
+    return written
+
+
+def discard_stored_file(user_id: str, path: Path, size: int) -> None:
+    """Undo store_upload: remove the file and give its bytes back."""
+    path.unlink(missing_ok=True)
+    release_storage(user_id, size)
+
+
+def store_upload(
+    user: dict,
+    stream: BinaryIO,
+    dest: Path,
+    max_bytes: int,
+    verify: Callable[[Path], None],
+) -> int:
+    """
+    Write an upload stream to ``dest`` and charge it to the user's quota.
+
+    The size is checked and reserved atomically before writing (the stream is
+    a spooled temporary file, so its size is known), the copy is capped at
+    ``max_bytes`` and ``verify`` checks the content. On any failure the file is
+    removed and the reservation released.
+
+    Returns:
+        The number of bytes stored.
+
+    Raises:
+        ValidationError: empty, too large or invalid content.
+        StorageQuotaExceededError: the upload would exceed the user's quota.
+    """
+    user_id = str(user["_id"])
+    size = _stream_size(stream)
+    _check_size(size, max_bytes)
+    reserve_storage(user, size)
+    try:
+        written = _copy_limited(stream, dest, max_bytes)
+        verify(dest)
+    except BaseException:
+        discard_stored_file(user_id, dest, size)
+        raise
+    if written != size:
+        add_storage(user_id, written - size)
     return written
 
 
@@ -145,17 +176,12 @@ def save_uploaded_image(
     if document_id:
         _require_owned_document(document_id, user_id)
 
-    size = _stream_size(stream)
-    _check_size(size, MAX_IMAGE_FILE_SIZE)
-    _check_quota(user, size)
-
     image_id = ObjectId()
     stored_name = f"{image_id}{ext}"
     final_path = get_user_upload_path(user_id, "images/uploaded") / stored_name
+    saved_size = store_upload(user, stream, final_path, MAX_IMAGE_FILE_SIZE, verify_image_file)
 
     try:
-        saved_size = _copy_limited(stream, final_path, MAX_IMAGE_FILE_SIZE)
-        verify_image_file(final_path)
         image_doc = {
             "_id": image_id,
             "user_id": user_id,
@@ -174,7 +200,7 @@ def save_uploaded_image(
         }
         get_images_collection().insert_one(image_doc)
     except BaseException:
-        final_path.unlink(missing_ok=True)
+        discard_stored_file(user_id, final_path, saved_size)
         raise
 
     return image_doc
@@ -192,16 +218,11 @@ def save_uploaded_pdf(user: dict, filename: Optional[str], stream: BinaryIO) -> 
     original_filename = display_filename(filename)
     _extension(original_filename, ALLOWED_PDF_EXTENSIONS)
 
-    size = _stream_size(stream)
-    _check_size(size, MAX_PDF_FILE_SIZE)
-    _check_quota(user, size)
-
     doc_id = ObjectId()
     final_path = get_user_upload_path(user_id, "pdfs") / f"{doc_id}.pdf"
+    saved_size = store_upload(user, stream, final_path, MAX_PDF_FILE_SIZE, _verify_pdf_file)
 
     try:
-        saved_size = _copy_limited(stream, final_path, MAX_PDF_FILE_SIZE)
-        _verify_pdf_file(final_path)
         doc = {
             "_id": doc_id,
             "user_id": user_id,
@@ -215,7 +236,7 @@ def save_uploaded_pdf(user: dict, filename: Optional[str], stream: BinaryIO) -> 
         }
         get_documents_collection().insert_one(doc)
     except BaseException:
-        final_path.unlink(missing_ok=True)
+        discard_stored_file(user_id, final_path, saved_size)
         raise
 
     return doc

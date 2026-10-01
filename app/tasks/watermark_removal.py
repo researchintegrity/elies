@@ -1,18 +1,22 @@
 """
 Watermark removal tasks for async processing
 """
-from celery import current_task
 from app.celery_config import celery_app
 from app.db.mongodb import get_documents_collection, get_images_collection
 from app.utils.docker_watermark import remove_watermark_with_docker
-from app.config.settings import CELERY_MAX_RETRIES, convert_host_path_to_container
+from app.config.settings import (
+    CELERY_MAX_RETRIES,
+    WATERMARK_REMOVAL_OUTPUT_SUFFIX_TEMPLATE,
+    convert_host_path_to_container,
+)
 from app.schemas import JobType, JobStatus
 from app.services.job_logger import update_job_progress, complete_job
+from app.services.storage_service import add_storage
 from app.tasks.lifecycle import TrackedJob, handle_task_exception
 from bson import ObjectId
 from datetime import datetime
 import logging
-import os
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
@@ -88,12 +92,15 @@ def remove_watermark_from_document(
         
         update_job_progress(job_id, user_id, None, 30, "Running Docker watermark removal...")
         
-        # Run watermark removal using Docker
+        # Run watermark removal using Docker; the cleaned PDF is stored under
+        # the id of the document record created for it
+        cleaned_oid = ObjectId()
         success, status_message, output_file_info = remove_watermark_with_docker(
             doc_id=doc_id,
             user_id=user_id,
             pdf_file_path=pdf_path,
-            aggressiveness_mode=aggressiveness_mode
+            aggressiveness_mode=aggressiveness_mode,
+            output_id=str(cleaned_oid),
         )
         
         # Determine final status and prepare update
@@ -103,7 +110,14 @@ def remove_watermark_from_document(
             # Get file size of cleaned PDF
             output_file_path = str(convert_host_path_to_container(output_file_info.get("path")))
             output_file_size = output_file_info.get("size", 0)
-            output_filename = output_file_info.get("filename")
+            original = documents_col.find_one({"_id": ObjectId(doc_id)}, {"filename": 1}) or {}
+            output_filename = (
+                f"{Path(original['filename']).stem}"
+                f"{WATERMARK_REMOVAL_OUTPUT_SUFFIX_TEMPLATE.format(mode=aggressiveness_mode)}"
+                if original.get("filename") else output_file_info.get("filename")
+            )
+            # The cleaned PDF is stored in the user's workspace: it counts against the quota
+            add_storage(user_id, output_file_size)
             
             logger.info(
                 f"Watermark removal successful for doc_id={doc_id}: "
@@ -115,6 +129,7 @@ def remove_watermark_from_document(
             # Create a new document record for the cleaned PDF
             # (keeping original document intact)
             cleaned_doc_data = {
+                "_id": cleaned_oid,
                 "user_id": user_id,
                 "filename": output_filename,
                 "file_path": output_file_path,

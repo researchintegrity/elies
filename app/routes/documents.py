@@ -29,7 +29,7 @@ from app.schemas import (
 from app.services.document_service import delete_document_and_artifacts
 from app.services.job_logger import create_job_log, ensure_job_capacity, find_job_by_celery_task
 from app.services.task_submission import submit_task
-from app.services.quota_helpers import augment_with_quota
+from app.services.quota_helpers import augment_list_with_quota, augment_with_quota
 from app.services.resource_helpers import get_owned_resource
 from app.services.upload_service import save_uploaded_pdf
 from app.services.watermark_removal_service import (
@@ -37,10 +37,7 @@ from app.services.watermark_removal_service import (
     initiate_watermark_removal,
 )
 from app.tasks.image_extraction import extract_images_from_document
-from app.utils.file_storage import (
-    get_extraction_output_path,
-    update_user_storage_in_db,
-)
+from app.utils.file_storage import get_extraction_output_path
 from app.utils.docker_cbir import check_cbir_health
 from app.utils.security import get_current_user, get_current_user_media
 
@@ -84,7 +81,6 @@ def upload_document(
     doc_record = save_uploaded_pdf(current_user, file.filename, file.file)
     doc_oid = doc_record["_id"]
     doc_id = str(doc_oid)
-    update_user_storage_in_db(user_id_str)
 
     # Create extraction output directory
     get_extraction_output_path(user_id_str, doc_id)
@@ -154,12 +150,10 @@ def list_documents(
         .limit(actual_limit)
     )
     
-    # Convert to response models with quota info
-    responses = []
+    # Convert to response models with quota info (usage read once per page)
     for doc in documents:
         doc["_id"] = str(doc["_id"])
-        doc = augment_with_quota(doc, user_id_str, user_quota)
-        responses.append(DocumentResponse(**doc))
+    responses = [DocumentResponse(**doc) for doc in augment_list_with_quota(documents, user_id_str, user_quota)]
     # Get total count for pagination
     total = documents_col.count_documents(query)
 

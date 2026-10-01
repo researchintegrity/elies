@@ -10,7 +10,6 @@ from app.schemas import JobStatus, JobType
 from app.services.deletion_service import delete_document
 from app.services.job_logger import complete_job, create_job_log
 from app.services.resource_helpers import get_owned_resource
-from app.utils.file_storage import update_user_storage_in_db
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +40,6 @@ def delete_document_and_artifacts(
 
     try:
         result = delete_document(doc)
-        update_user_storage_in_db(user_id)
     except Exception as e:
         complete_job(job_id=job_id, user_id=user_id, status=JobStatus.FAILED, errors=[str(e)])
         raise

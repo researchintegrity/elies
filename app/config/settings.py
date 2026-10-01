@@ -123,6 +123,8 @@ PANEL_EXTRACTION_TIMEOUT = _env_int("PANEL_EXTRACTION_TIMEOUT", 600)  # 10 minut
 MAX_IMAGES_PER_EXTRACTION = _env_int("MAX_IMAGES_PER_EXTRACTION", 20)  # Max images per panel extraction request
 # Upper bound for list fields in requests (image ids to index/delete/search over)
 MAX_IDS_PER_REQUEST = _env_int("MAX_IDS_PER_REQUEST", 1000)
+# Upper bound on the nodes explored when building a relationship graph (issue #72)
+RELATIONSHIP_GRAPH_MAX_NODES = _env_int("RELATIONSHIP_GRAPH_MAX_NODES", 2000)
 
 # Docker image for Copy-Move Detection - Dense method (system_modules/copy-move-detection)
 COPY_MOVE_DETECTION_DOCKER_IMAGE = "copy-move-detection:latest"

@@ -2,6 +2,7 @@
 ELIES Scientific Image Analysis System
 """
 import logging
+from contextlib import asynccontextmanager
 
 from bson.errors import InvalidId
 from fastapi import FastAPI, Request
@@ -35,13 +36,23 @@ logger = logging.getLogger(__name__)
 # Media URLs carry ?token=...; keep bearer tokens out of the access log
 logging.getLogger("uvicorn.access").addFilter(RedactTokenFilter())
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Connect to MongoDB (creating indexes) before serving; fail fast if it is down."""
+    db_connection.connect()
+    yield
+    db_connection.disconnect()
+
+
 # Create FastAPI app
 app = FastAPI(
     title="ELIES Scientific Image Analysis System",
     description="A backed-end service for Image Analysis",
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
 # CORS: only the configured frontend origins (ALLOWED_ORIGINS). The frontend
@@ -107,24 +118,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     """Log unexpected errors in full, but never return internals to the client."""
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
     return JSONResponse(status_code=500, content={"detail": "Internal server error"})
-
-
-# ============================================================================
-# LIFECYCLE EVENTS
-# ============================================================================
-@app.on_event("startup")
-async def startup_event() -> None:
-    """Initialize database connection on startup."""
-    try:
-        db_connection.connect()
-    except Exception as e:
-        logger.error("Failed to connect to MongoDB: %s", str(e))
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Close database connection on shutdown"""
-    db_connection.disconnect()
 
 
 # ============================================================================
