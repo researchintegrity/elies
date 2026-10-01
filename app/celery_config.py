@@ -20,12 +20,15 @@ celery_app = Celery(
     "elies_tasks",
     broker=broker_url,
     backend=result_backend,
+    # Every module that defines tasks must be listed: workers only import these
     include=[
+        "app.tasks.cbir",
         "app.tasks.copy_move_detection",
-        "app.tasks.trufor",
         "app.tasks.image_extraction",
         "app.tasks.panel_extraction",
-        "app.tasks.watermark_removal"
+        "app.tasks.provenance",
+        "app.tasks.trufor",
+        "app.tasks.watermark_removal",
     ]
 )
 

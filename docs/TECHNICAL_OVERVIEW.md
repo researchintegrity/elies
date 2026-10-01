@@ -65,7 +65,6 @@ elies/
 ├── datasets/                        # Sample datasets for testing
 ├── docker-compose.yml               # Multi-container orchestration
 ├── Dockerfile                       # API container
-├── Dockerfile.worker                # Celery worker container
 ├── requirements.txt                 # Python dependencies
 ├── pytest.ini                       # Pytest configuration
 └── README.md                        # This file
