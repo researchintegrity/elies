@@ -39,6 +39,33 @@ logger = logging.getLogger(__name__)
 logging.getLogger("uvicorn.access").addFilter(RedactTokenFilter())
 
 
+class UnhandledErrorMiddleware:
+    """Log unexpected errors in full, but never return internals to the client."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        response_started = False
+
+        async def send_tracking_start(message):
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_tracking_start)
+        except Exception:
+            logger.exception("Unhandled error on %s %s", scope.get("method"), scope.get("path"))
+            if response_started:  # e.g. a streaming response failed midway
+                raise
+            await JSONResponse(status_code=500, content={"detail": "Internal server error"})(scope, receive, send)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Connect to MongoDB (creating indexes) before serving; fail fast if it is down."""
@@ -56,6 +83,11 @@ app = FastAPI(
     redoc_url="/redoc",
     lifespan=lifespan,
 )
+
+# Innermost: unexpected errors become a JSON 500 here, inside the CORS and
+# request-ID middleware, so the response keeps their headers and the log line
+# its request ID (Starlette's own handler for Exception runs outside them).
+app.add_middleware(UnhandledErrorMiddleware)
 
 # CORS: only the configured frontend origins (ALLOWED_ORIGINS). The frontend
 # authenticates with a bearer header, so credentialed CORS is not needed.
@@ -115,13 +147,6 @@ async def elies_exception_handler(request: Request, exc: ELIESException) -> JSON
 async def invalid_id_handler(request: Request, exc: InvalidId) -> JSONResponse:
     """A malformed ObjectId in a path, query or body is a client error."""
     return JSONResponse(status_code=400, content={"detail": "Invalid ID format"})
-
-
-@app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
-    """Log unexpected errors in full, but never return internals to the client."""
-    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
-    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 # ============================================================================

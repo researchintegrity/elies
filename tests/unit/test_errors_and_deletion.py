@@ -70,9 +70,13 @@ def test_unexpected_errors_do_not_leak_details(client, alice, monkeypatch):
         raise RuntimeError("mongodb://admin:secret@10.0.0.5 unreachable")
 
     monkeypatch.setattr(analyses_routes, "get_analyses_collection", boom)
-    response = client.get("/analyses/stats", headers=alice.headers)
+    response = client.get("/analyses/stats", headers={**alice.headers, "Origin": "http://localhost:5173",
+                                                      "X-Request-ID": "req-500"})
     assert response.status_code == 500
     assert response.json() == {"detail": "Internal server error"}
+    # The error response keeps the request ID and the CORS headers (the browser can read it)
+    assert response.headers["X-Request-ID"] == "req-500"
+    assert response.headers["access-control-allow-origin"] == "http://localhost:5173"
 
 
 # ---------------------------------------------------------------- #63 ----

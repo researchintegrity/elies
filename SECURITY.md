@@ -24,7 +24,8 @@ ELIES stores unpublished research material, so a deployment should at least:
 - set a random `JWT_SECRET` (32+ characters) and keep it private;
 - keep MongoDB, Redis, Milvus, MinIO, CBIR and provenance bound to
   `127.0.0.1` (`BIND_ADDRESS`, the default) and set `REDIS_PASSWORD`;
-- serve the API over HTTPS through a reverse proxy, with `ALLOWED_ORIGINS`
+- serve the API over HTTPS through a reverse proxy (with `FORWARDED_ALLOW_IPS=*`
+  so rate limits see real client addresses), with `ALLOWED_ORIGINS`
   limited to the frontend's URL;
 - create administrators with `python -m app.cli create-admin` (there is no
   default account) and review `GET /admin/audit-log`;

@@ -47,8 +47,12 @@ The compose files publish:
 Put the API behind a reverse proxy that terminates TLS (Nginx, Caddy,
 Traefik) and set `API_BIND_ADDRESS=127.0.0.1` so it is reachable only
 through the proxy. The production compose file starts uvicorn with
-`--proxy-headers` so client IPs (used by the login rate limit) come from the
-proxy. Example Nginx location:
+`--proxy-headers`; also set `FORWARDED_ALLOW_IPS=*` in `.env` so client
+addresses are taken from the proxy's `X-Forwarded-For` header. Without it
+the API sees every request coming from the Docker gateway, and the per-IP
+login and registration limits turn into one limit shared by all users. Only
+do this when the API port is bound to `127.0.0.1`, otherwise clients could
+forge their address. Example Nginx location:
 
 ```nginx
 location / {

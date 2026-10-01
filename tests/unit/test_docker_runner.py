@@ -19,8 +19,10 @@ FAKE_DOCKER = textwrap.dedent(f"""\
     command = sys.argv[1]
     mode = os.environ.get("FAKE_DOCKER_MODE", "ok")
     if command == "ps":
-        print("abc123")
-        print("def456")
+        if "--format" in sys.argv:  # managed tool containers: "<id> <worker label>"
+            sys.stdout.write(os.environ.get("FAKE_DOCKER_TOOLS", ""))
+        else:  # running container ids
+            sys.stdout.write(os.environ.get("FAKE_DOCKER_RUNNING", ""))
     elif command == "run":
         if mode == "chatty":
             sys.stderr.write("w" * 300000)
@@ -116,11 +118,20 @@ def test_tool_failure_is_reported(fake_docker, monkeypatch):
     assert "tool crashed" in result.describe_failure()
 
 
-def test_orphans_from_this_worker_are_killed(fake_docker):
+def test_orphans_of_gone_workers_are_killed(fake_docker, monkeypatch):
+    live_worker, gone_worker = "b" * 12, "a" * 12
+    monkeypatch.setenv("FAKE_DOCKER_TOOLS", "\n".join([
+        f"t-own {docker_runner.WORKER_LABEL}",   # started by an earlier run of this worker
+        f"t-gone {gone_worker}",                 # its worker container was recreated
+        f"t-live {live_worker}",                 # another worker, still running
+        "t-host laptop",                         # a worker running directly on a host
+    ]) + "\n")
+    monkeypatch.setenv("FAKE_DOCKER_RUNNING", live_worker + "c" * 52 + "\n")
+
     assert kill_orphaned_containers() == 2
     log = fake_docker.read_text()
-    assert f"label=elies.worker={docker_runner.WORKER_LABEL}" in log
-    assert "kill abc123" in log and "kill def456" in log
+    assert "kill t-own" in log and "kill t-gone" in log
+    assert "kill t-live" not in log and "kill t-host" not in log
 
 
 def test_non_utf8_tool_output_does_not_stall_the_run(fake_docker, monkeypatch):

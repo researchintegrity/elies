@@ -284,6 +284,9 @@ def test_stream_falls_back_to_in_process_events_without_redis(mock_db, monkeypat
         def pubsub(self):
             return DownPubSub()
 
+        async def ping(self):
+            raise redis.ConnectionError("down")
+
         async def aclose(self):
             pass
 
@@ -301,6 +304,82 @@ def test_stream_falls_back_to_in_process_events_without_redis(mock_db, monkeypat
         return chunk
 
     assert '"event": "job_completed"' in asyncio.run(scenario())
+
+
+def test_stream_without_redis_closes_when_redis_is_back(mock_db, monkeypatch):
+    import redis
+
+    class DownPubSub:
+        async def subscribe(self, *args):
+            raise redis.ConnectionError("down")
+
+    class RecoveringClient:
+        pings = 0
+
+        def pubsub(self):
+            return DownPubSub()
+
+        async def ping(self):
+            RecoveringClient.pings += 1
+            if RecoveringClient.pings < 2:
+                raise redis.ConnectionError("still down")
+            return True
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(jobs_routes, "_async_redis_client", lambda: RecoveringClient())
+    monkeypatch.setattr(jobs_routes, "POLL_SECONDS", 0.05)
+    monkeypatch.setattr(jobs_routes, "REDIS_RETRY_SECONDS", 0.05)
+
+    async def scenario():
+        chunks = [chunk async for chunk in jobs_routes.job_event_stream("u1")]
+        return chunks
+
+    asyncio.run(asyncio.wait_for(scenario(), 5))  # the stream ends by itself
+    assert RecoveringClient.pings == 2
+
+
+def test_redis_stream_also_gets_events_the_api_could_not_publish(mock_db, monkeypatch):
+    job_id = job_logger.create_job_log("u1", JobType.TRUFOR, "t")
+
+    async def scenario():
+        stream = jobs_routes.job_event_stream("u1")
+        waiter = asyncio.ensure_future(_next_data_event(stream))
+        await asyncio.sleep(0.2)  # subscribed through Redis
+        # This API process now considers Redis down (e.g. after a timeout elsewhere)
+        monkeypatch.setattr(redis_client, "_unavailable_until", float("inf"))
+        await asyncio.to_thread(job_logger.complete_job, job_id, "u1", job_logger.JobStatus.COMPLETED)
+        chunk = await waiter
+        await stream.aclose()
+        return chunk
+
+    assert '"event": "job_completed"' in asyncio.run(scenario())
+
+
+def test_stream_closes_when_it_loses_redis(mock_db, monkeypatch):
+    import redis
+
+    class BreakingPubSub:
+        async def subscribe(self, *args):
+            pass
+
+        async def get_message(self, **kwargs):
+            raise redis.ConnectionError("connection lost")
+
+    class Client:
+        def pubsub(self):
+            return BreakingPubSub()
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(jobs_routes, "_async_redis_client", lambda: Client())
+
+    async def scenario():
+        return [chunk async for chunk in jobs_routes.job_event_stream("u1")]
+
+    assert asyncio.run(asyncio.wait_for(scenario(), 5)) == []
 
 
 def test_retry_is_scheduled_even_if_mongodb_is_the_service_that_is_down(mock_db, monkeypatch):

@@ -21,6 +21,7 @@ containers. Only `JWT_SECRET`, `HOST_WORKSPACE_PATH` and
 | `API_PORT` | `8000` | API port. |
 | `BIND_ADDRESS` | `127.0.0.1` | Host interface for MongoDB, Redis, Milvus, MinIO, CBIR, provenance, Flower and Attu. Keep it local. |
 | `ALLOWED_ORIGINS` | local frontend dev servers | Comma-separated browser origins allowed by CORS. |
+| `FORWARDED_ALLOW_IPS` | `127.0.0.1` | Addresses whose `X-Forwarded-For` header uvicorn trusts. Set `*` when the API is reachable only through a reverse proxy (`API_BIND_ADDRESS=127.0.0.1`): requests then reach the container from the Docker gateway, and without it every client shares one per-IP rate limit. |
 | `MONGODB_URL` | `mongodb://localhost:27017` | Include credentials when MongoDB authentication is on. |
 | `DATABASE_NAME` | `elies_system` | Use `elis_system` to keep data from installs made before the ELIES rename. |
 | `MONGO_ROOT_USERNAME`, `MONGO_ROOT_PASSWORD` | empty | Create a MongoDB root user when the data volume is first initialised. |

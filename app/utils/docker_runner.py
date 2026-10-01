@@ -13,6 +13,7 @@ Every tool container:
   dead-lock the worker on a full pipe.
 """
 import logging
+import re
 import socket
 import subprocess
 import threading
@@ -31,6 +32,8 @@ logger = logging.getLogger(__name__)
 # Identifies containers started by this worker (the hostname survives restarts
 # of the same worker container, so leftovers can be cleaned up on start)
 WORKER_LABEL = socket.gethostname()
+# Docker sets a container's hostname to its short id
+_CONTAINER_HOSTNAME = re.compile(r"[0-9a-f]{12}")
 MANAGED_LABEL = "elies.managed=true"
 
 _DAEMON_UNAVAILABLE_MARKERS = (
@@ -207,23 +210,39 @@ def run_tool_container(
     return result
 
 
+def _docker_lines(args: List[str]) -> Optional[List[str]]:
+    try:
+        listed = subprocess.run([settings.DOCKER_BINARY, *args], capture_output=True, text=True,
+                                timeout=_KILL_TIMEOUT)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        logger.warning("Could not list containers: %s", e)
+        return None
+    return [line.strip() for line in listed.stdout.splitlines() if line.strip()]
+
+
 def kill_orphaned_containers() -> int:
     """
-    Kill tool containers left running by an earlier run of this worker
-    (e.g. after a crash or redeploy). Returns how many were killed.
+    Kill tool containers whose worker is gone: those started by an earlier
+    run of this worker (same hostname: a restarted container) and those
+    whose worker container no longer runs (in Docker the hostname is the
+    worker container's short id, which changes when compose recreates it).
+    Containers of live workers, and of workers running directly on a host,
+    are left alone. Returns how many were killed.
     """
-    try:
-        listed = subprocess.run(
-            [settings.DOCKER_BINARY, "ps", "-q", "--filter", f"label={MANAGED_LABEL}",
-             "--filter", f"label=elies.worker={WORKER_LABEL}"],
-            capture_output=True, text=True, timeout=_KILL_TIMEOUT,
-        )
-    except (OSError, subprocess.TimeoutExpired) as e:
-        logger.warning("Could not list orphaned tool containers: %s", e)
+    tools = _docker_lines(["ps", "--filter", f"label={MANAGED_LABEL}",
+                           "--format", '{{.ID}} {{.Label "elies.worker"}}'])
+    running = _docker_lines(["ps", "-q", "--no-trunc"])
+    if tools is None or running is None:
         return 0
-    ids = [line.strip() for line in listed.stdout.splitlines() if line.strip()]
-    for container_id in ids:
-        kill_container(container_id)
-    if ids:
-        logger.warning("Killed %d orphaned tool container(s)", len(ids))
-    return len(ids)
+
+    killed = 0
+    for line in tools:
+        container_id, _, owner = line.partition(" ")
+        owner_gone = bool(_CONTAINER_HOSTNAME.fullmatch(owner)) and not any(
+            running_id.startswith(owner) for running_id in running)
+        if owner == WORKER_LABEL or owner_gone:
+            kill_container(container_id)
+            killed += 1
+    if killed:
+        logger.warning("Killed %d orphaned tool container(s)", killed)
+    return killed

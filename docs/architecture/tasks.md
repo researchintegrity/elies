@@ -55,6 +55,9 @@ The `beat` service runs:
 ## Job events
 
 Workers publish job events on Redis (channel `elies:jobs:<user_id>`); the API
-relays them to the user's `/jobs/stream` connections. Tasks carry the
+relays them to the user's `/jobs/stream` connections. Events the API cannot
+publish while Redis is unreachable are delivered in-process. A stream opened
+without Redis closes as soon as Redis is back, and one that loses Redis
+closes too; the frontend reconnects automatically. Tasks carry the
 `X-Request-ID` of the request that queued them, so their log lines can be
 matched with the API's.

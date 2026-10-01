@@ -17,6 +17,7 @@ import math
 import asyncio
 import json
 import logging
+import time
 
 from app.config.settings import JOB_EVENTS_REDIS_URL
 from app.utils.security import get_current_user
@@ -78,56 +79,89 @@ def get_job_stats(current_user: dict = Depends(get_current_user)):
 
 
 KEEPALIVE_SECONDS = 30
+POLL_SECONDS = 1.0           # how often the stream checks both event sources
+REDIS_RETRY_SECONDS = 5      # how often a stream without Redis checks whether it is back
 
 
 def _async_redis_client():
     return aioredis.from_url(JOB_EVENTS_REDIS_URL, socket_connect_timeout=1)
 
 
+async def _redis_reachable(client) -> bool:
+    try:
+        return bool(await client.ping())
+    except (redis.RedisError, OSError):
+        return False
+
+
+def _sse(data: str) -> str:
+    return f"data: {data}\n\n"
+
+
 async def job_event_stream(user_id: str) -> AsyncIterator[str]:
     """
     Server-sent events for one user's jobs.
 
-    Subscribes to the user's Redis channel, which receives events published
-    by the API and by Celery workers. Falls back to in-process events when
-    Redis is unreachable.
+    Events arrive two ways: on the user's Redis channel (published by the API
+    and by Celery workers) and on an in-process queue (events this API process
+    could not publish because Redis was unreachable for it).
+
+    A stream opened while Redis is unreachable uses the queue only, and closes
+    as soon as Redis is back, so the client reconnects and receives worker
+    events again; a stream that loses Redis also closes. The frontend
+    reconnects automatically when a stream ends.
     """
+    queue = subscribe(user_id)
     client = _async_redis_client()
     pubsub = client.pubsub()
     try:
-        await pubsub.subscribe(job_events_channel(user_id))
-    except (redis.RedisError, OSError) as e:
-        logger.warning("Job stream: Redis unavailable (%s); using in-process events", e)
-        await client.aclose()
-        async for chunk in _local_event_stream(user_id):
-            yield chunk
-        return
+        try:
+            await pubsub.subscribe(job_events_channel(user_id))
+            use_redis = True
+        except (redis.RedisError, OSError) as e:
+            logger.warning("Job stream: Redis unavailable (%s); using in-process events", e)
+            use_redis = False
 
-    try:
+        last_sent = last_redis_check = time.monotonic()
         while True:
-            message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=KEEPALIVE_SECONDS)
-            if message and message.get("type") == "message":
-                data = message["data"]
-                yield f"data: {data.decode() if isinstance(data, bytes) else data}\n\n"
+            if use_redis:
+                try:
+                    message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=POLL_SECONDS)
+                except (redis.RedisError, OSError) as e:
+                    logger.warning("Job stream: lost Redis (%s); closing so the client reconnects", e)
+                    return
+                if message and message.get("type") == "message":
+                    data = message["data"]
+                    yield _sse(data.decode() if isinstance(data, bytes) else data)
+                    last_sent = time.monotonic()
             else:
-                yield ": keepalive\n\n"
-    finally:
-        await pubsub.unsubscribe()
-        await pubsub.aclose()
-        await client.aclose()
+                try:
+                    notification = await asyncio.wait_for(queue.get(), timeout=POLL_SECONDS)
+                    yield _sse(json.dumps(notification, default=str))
+                    last_sent = time.monotonic()
+                except asyncio.TimeoutError:
+                    pass
 
+            while not queue.empty():
+                yield _sse(json.dumps(queue.get_nowait(), default=str))
+                last_sent = time.monotonic()
 
-async def _local_event_stream(user_id: str) -> AsyncIterator[str]:
-    queue = subscribe(user_id)
-    try:
-        while True:
-            try:
-                notification = await asyncio.wait_for(queue.get(), timeout=KEEPALIVE_SECONDS)
-                yield f"data: {json.dumps(notification, default=str)}\n\n"
-            except asyncio.TimeoutError:
+            now = time.monotonic()
+            if not use_redis and now - last_redis_check >= REDIS_RETRY_SECONDS:
+                last_redis_check = now
+                if await _redis_reachable(client):
+                    logger.info("Job stream: Redis is back; closing so the client reconnects")
+                    return
+            if now - last_sent >= KEEPALIVE_SECONDS:
                 yield ": keepalive\n\n"
+                last_sent = now
     finally:
         unsubscribe(user_id, queue)
+        for owner, method in ((pubsub, "unsubscribe"), (pubsub, "aclose"), (client, "aclose")):
+            try:
+                await getattr(owner, method)()
+            except Exception:  # noqa: BLE001 - best effort cleanup of a broken connection
+                pass
 
 
 @router.get("/stream")
