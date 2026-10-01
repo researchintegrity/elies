@@ -181,6 +181,13 @@ FULL_NAME_MAX_LENGTH = 100
 DEFAULT_THUMBNAIL_SIZE = (300, 300)  # Max width x height in pixels
 THUMBNAIL_JPEG_QUALITY = 85  # JPEG quality (1-100)
 
+# Largest image (width * height) accepted on upload or decoded for thumbnails.
+# Guards against decompression bombs; raise it for very large microscopy scans.
+MAX_IMAGE_PIXELS = int(os.getenv("MAX_IMAGE_PIXELS", str(200_000_000)))
+
+# Maximum number of files accepted by one batch image upload request
+MAX_BATCH_UPLOAD_FILES = int(os.getenv("MAX_BATCH_UPLOAD_FILES", "200"))
+
 # Password hashing settings
 BCRYPT_ROUNDS = int(os.getenv("BCRYPT_ROUNDS", "12"))  # bcrypt cost factor (tests lower it for speed)
 

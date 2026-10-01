@@ -2,7 +2,6 @@
 File storage utilities for document and image upload handling
 """
 import logging
-import random
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
@@ -47,7 +46,7 @@ def get_user_upload_path(user_id: str, subfolder: str = None) -> Path:
     if subfolder:
         user_path = user_path / subfolder
     
-    logger.info(f"Creating directory: {user_path} (UPLOAD_DIR={UPLOAD_DIR})")
+    logger.debug("Ensuring directory exists: %s", user_path)
     try:
         user_path.mkdir(parents=True, exist_ok=True)
     except OSError as e:
@@ -147,167 +146,6 @@ def get_analysis_output_path(user_id: str, analysis_id: str, analysis_type: str)
     analysis_path = UPLOAD_DIR / user_id / "analyses" / folder_name / analysis_id
     analysis_path.mkdir(parents=True, exist_ok=True)
     return analysis_path
-
-def generate_unique_filename(original_filename: str, prefix: str = None) -> str:
-    """
-    Generate a unique filename with timestamp and optional prefix
-    
-    Args:
-        original_filename: Original filename
-        prefix: Optional prefix (e.g., document ID)
-        
-    Returns:
-        Unique filename with extension preserved
-    """
-    # add a random value to avoid collisions
-    random_value = int(datetime.now().timestamp()) + random.randint(0, 9999)
-    file_ext = Path(original_filename).suffix.lower()
-    base_name = Path(original_filename).stem
-    
-    if prefix:
-        filename = f"{prefix}_{random_value}_{base_name}{file_ext}"
-    else:
-        filename = f"{random_value}_{base_name}{file_ext}"
-    
-    return filename
-
-
-def validate_pdf(filename: str, file_size: int) -> Tuple[bool, Optional[str]]:
-    """
-    Validate a PDF file
-    
-    Args:
-        filename: Filename to validate
-        file_size: File size in bytes
-        
-    Returns:
-        Tuple of (is_valid, error_message)
-    """
-    # Check extension
-    file_ext = Path(filename).suffix.lower()
-    if file_ext not in ALLOWED_PDF_EXTENSIONS:
-        return False, f"Invalid file type: {file_ext}. Only PDF files are allowed."
-    
-    # Check file size
-    if file_size > MAX_PDF_SIZE:
-        size_mb = MAX_PDF_SIZE / (1024 * 1024)
-        return False, f"File too large. Maximum size is {size_mb}MB."
-    
-    if file_size == 0:
-        return False, "File is empty."
-    
-    return True, None
-
-
-def validate_image(filename: str, file_size: int) -> Tuple[bool, Optional[str]]:
-    """
-    Validate an image file
-    
-    Args:
-        filename: Filename to validate
-        file_size: File size in bytes
-        
-    Returns:
-        Tuple of (is_valid, error_message)
-    """
-    # Check extension
-    file_ext = Path(filename).suffix.lower()
-    if file_ext not in ALLOWED_IMAGE_EXTENSIONS:
-        allowed = ", ".join(ALLOWED_IMAGE_EXTENSIONS)
-        return False, f"Invalid file type: {file_ext}. Allowed types: {allowed}."
-    
-    # Check file size
-    if file_size > MAX_IMAGE_SIZE:
-        size_mb = MAX_IMAGE_SIZE / (1024 * 1024)
-        return False, f"File too large. Maximum size is {size_mb}MB."
-    
-    if file_size == 0:
-        return False, "File is empty."
-    
-    return True, None
-
-
-def save_pdf_file(user_id: str, file_content: bytes, original_filename: str) -> Tuple[str, int]:
-    """
-    Save a PDF file to disk
-    
-    Args:
-        user_id: User ID
-        file_content: File content as bytes
-        original_filename: Original filename
-        
-    Returns:
-        Tuple of (file_path, file_size)
-        
-    Raises:
-        IOError: If file cannot be saved
-    """
-    # Generate unique filename
-    unique_filename = generate_unique_filename(original_filename)
-    
-    # Get user PDF directory
-    pdf_dir = get_user_upload_path(user_id, "pdfs")
-    
-    # Full file path
-    file_path = pdf_dir / unique_filename
-    
-    # Save file
-    try:
-        with open(file_path, "wb") as f:
-            f.write(file_content)
-        
-        file_size = len(file_content)
-        return str(file_path), file_size
-    
-    except Exception as e:
-        raise IOError(f"Failed to save PDF file: {str(e)}")
-
-
-def save_image_file(
-    user_id: str,
-    file_content: bytes,
-    original_filename: str,
-    doc_id: Optional[str] = None
-) -> Tuple[str, int]:
-    """
-    Save an image file to disk
-    
-    Args:
-        user_id: User ID
-        file_content: File content as bytes
-        original_filename: Original filename
-        doc_id: Optional document ID (for extracted images)
-        
-    Returns:
-        Tuple of (file_path, file_size)
-        
-    Raises:
-        IOError: If file cannot be saved
-    """
-    # Determine if extracted or uploaded
-    if doc_id:
-        # Extracted image - save to extracted/{doc_id}/ directory
-        image_dir = get_extraction_output_path(user_id, doc_id)
-        unique_filename = generate_unique_filename(original_filename, prefix="extracted")
-    else:
-        # User-uploaded image
-        image_dir = get_user_upload_path(user_id, "images/uploaded")
-        unique_filename = generate_unique_filename(original_filename)
-    
-    # Full file path
-    file_path = image_dir / unique_filename
-    
-    # Save file
-    try:
-        with open(file_path, "wb") as f:
-            f.write(file_content)
-        
-        file_size = len(file_content)
-        return str(file_path), file_size
-    
-    except Exception as e:
-        raise IOError(f"Failed to save image file: {str(e)}")
-
 
 def delete_file(file_path: str) -> Tuple[bool, Optional[str]]:
     """

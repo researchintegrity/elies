@@ -3,7 +3,7 @@ Image upload routes for extracted and user-uploaded image management
 """
 import logging
 import math
-import time
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Union
@@ -13,15 +13,15 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from fastapi.responses import FileResponse
 from PIL import Image
 
-from app.celery_config import celery_app
+from app.exceptions import StorageQuotaExceededError, ValidationError
 from app.config.settings import (
     DEFAULT_THUMBNAIL_SIZE,
+    MAX_BATCH_UPLOAD_FILES,
+    MAX_IMAGE_PIXELS,
     THUMBNAIL_JPEG_QUALITY,
-    convert_host_path_to_container,
 )
 from app.config.storage_quota import DEFAULT_USER_STORAGE_QUOTA
 from app.db.mongodb import (
-    get_documents_collection,
     get_images_collection,
     get_indexing_jobs_collection,
 )
@@ -50,246 +50,25 @@ from app.services.panel_extraction_service import (
 )
 from app.services.quota_helpers import augment_with_quota, augment_list_with_quota
 from app.services.resource_helpers import get_owned_resource
+from app.services.upload_service import save_uploaded_image
 from app.tasks.cbir import cbir_index_image, cbir_update_labels, cbir_index_batch_with_progress
 from app.utils.docker_cbir import check_cbir_health
 from app.utils.file_storage import (
-    check_storage_quota,
     get_thumbnail_path,
-    save_image_file,
     update_user_storage_in_db,
-    validate_image,
 )
-from app.utils.metadata_parser import extract_exif_metadata
 from app.utils.security import get_current_user
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/images", tags=["images"])
 
-
-@router.post("/upload", response_model=ImageResponse, status_code=status.HTTP_201_CREATED)
-async def upload_image(
-    file: UploadFile = File(...),
-    document_id: str = Query(None, description="Optional document ID if image is related to a document"),
-    current_user: dict = Depends(get_current_user)
-):
-    """
-    Upload an image file (for user-uploaded images)
-    
-    - Validates image file
-    - Checks storage quota before saving
-    - Saves to disk in user's images/uploaded/ directory
-    - Renames file to {_id}.{ext} after MongoDB insertion
-    - Creates image record in MongoDB with new fields
-    - Optionally links to a document
-    
-    Args:
-        file: Image file to upload
-        document_id: Optional document ID to link image to
-        current_user: Current authenticated user
-        
-    Returns:
-        ImageResponse with image info
-        
-    Raises:
-        HTTP 413: If storage quota would be exceeded
-    """
-    try:
-        import os
-        from app.config.settings import convert_container_path_to_host
-        
-        # Pre-flight CBIR health check - block upload if CBIR is unavailable
-        cbir_healthy, cbir_message = check_cbir_health()
-        if not cbir_healthy:
-            logger.warning(f"CBIR service unavailable: {cbir_message}")
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Unable to upload images at this time. Please try again in a few minutes."
-            )
-        
-        # Read file content
-        content = await file.read()
-        file_size = len(content)
-        
-        # Validate image
-        is_valid, error_msg = validate_image(file.filename, file_size)
-        if not is_valid:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-        
-        user_id_str = str(current_user["_id"])
-        
-        # Check storage quota BEFORE saving file
-        user_quota = current_user.get("storage_limit_bytes", DEFAULT_USER_STORAGE_QUOTA)
-        quota_ok, quota_error = check_storage_quota(user_id_str, file_size, user_quota)
-        if not quota_ok:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=quota_error
-            )
-        
-        # Save image file
-        try:
-            file_path, saved_size = save_image_file(
-                user_id_str,
-                content,
-                file.filename,
-                doc_id=None  # User-uploaded, not extracted
-            )
-        except IOError as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to save file: {str(e)}"
-            )
-        
-        # If document_id provided, verify it belongs to user
-        if document_id:
-            documents_col = get_documents_collection()
-            try:
-                doc = documents_col.find_one({
-                    "_id": ObjectId(document_id),
-                    "user_id": user_id_str
-                })
-            except Exception:
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail="Invalid document ID"
-                )
-            
-            if not doc:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Document not found"
-                )
-        
-        # Extract EXIF metadata
-        exif_metadata = extract_exif_metadata(file_path)
-
-        # Create image record in MongoDB
-        images_col = get_images_collection()
-        
-        img_data = {
-            "user_id": user_id_str,
-            "filename": file.filename,
-            "file_path": file_path,
-            "file_size": saved_size,
-            "source_type": "uploaded",
-            "document_id": document_id,  # Can be None for user-uploaded
-            "pdf_page": None,  # Not applicable for uploaded images
-            "page_bbox": None,
-            "extraction_mode": None,
-            "original_filename": file.filename,  # Store original name
-            "image_type": [],  # Empty for user-uploaded, can be edited later
-            "uploaded_date": datetime.utcnow(),
-            "exif_metadata": exif_metadata
-        }
-        
-        result = images_col.insert_one(img_data)
-        image_id = result.inserted_id
-        
-        # Rename file to use MongoDB _id
-        file_ext = Path(file.filename).suffix
-        new_filename = Path(file.filename).with_name(f"{image_id}{file_ext}")
-        
-        # Construct full paths using pathlib
-        old_path = Path(file_path)
-        if not old_path.is_absolute():
-            old_path = Path.cwd() / old_path
-        
-        new_full_path = old_path.parent / new_filename
-        
-        try:
-            old_path.rename(new_full_path)
-        except OSError as e:
-            # Delete MongoDB doc since we can't rename the file
-            images_col.delete_one({"_id": image_id})
-            raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to rename uploaded file: {str(e)}"
-            )
-        
-        # Update MongoDB with new filename with container-compatible path
-        # ISSUE IS HERE
-        file_path = Path(file_path).parent / new_filename
-        storage_path = convert_host_path_to_container(file_path)
-        images_col.update_one(
-            {"_id": image_id},
-            {
-                "$set": {
-                    "filename": str(new_filename),
-                    "file_path": str(storage_path)
-                }
-            }
-        )
-        
-        # Retrieve and return created image with quota info
-        img_record = images_col.find_one({"_id": image_id})
-        img_record["_id"] = str(image_id)
-        
-        # Add quota information to response
-        img_record = augment_with_quota(img_record, user_id_str, user_quota)
-        
-        # Update user storage in database for easy access
-        update_user_storage_in_db(user_id_str)
-        
-        # Trigger CBIR indexing asynchronously
-        try:
-            cbir_index_image.delay(
-                user_id=user_id_str,
-                image_id=str(image_id),
-                image_path=str(storage_path),
-                labels=img_record.get("image_type", [])
-            )
-        except Exception as e:
-            # Log but don't fail the upload if CBIR indexing fails to queue
-            import logging
-            logging.getLogger(__name__).warning(f"Failed to queue CBIR indexing for image {image_id}: {e}")
-        
-        return ImageResponse(**img_record)
-    
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Upload failed: {str(e)}"
-        )
+# Refuse to decode decompression bombs when generating thumbnails
+Image.MAX_IMAGE_PIXELS = MAX_IMAGE_PIXELS
 
 
-# ============================================================================
-# BATCH UPLOAD AND INDEXING STATUS ENDPOINTS
-# ============================================================================
-
-@router.post("/upload/batch", response_model=BatchUploadResponse, status_code=status.HTTP_202_ACCEPTED)
-async def upload_images_batch(
-    files: List[UploadFile] = File(...),
-    current_user: dict = Depends(get_current_user)
-):
-    """
-    Upload multiple images in a single request with progress tracking.
-    
-    - Validates and saves all images
-    - Creates MongoDB records for each
-    - Starts a single Celery task to index all images with progress tracking
-    - Returns a job_id to poll for indexing progress
-    
-    Args:
-        files: List of image files to upload
-        current_user: Current authenticated user
-        
-    Returns:
-        BatchUploadResponse with job_id for progress tracking
-        
-    Raises:
-        HTTP 400: If no valid images provided
-        HTTP 413: If storage quota would be exceeded
-    """
-    user_id_str = str(current_user["_id"])
-    user_quota = current_user.get("storage_limit_bytes", DEFAULT_USER_STORAGE_QUOTA)
-    
-    # Pre-flight CBIR health check - block upload if CBIR is unavailable
+def _require_cbir_available() -> None:
+    """Block uploads while CBIR is down: new images could not be indexed."""
     cbir_healthy, cbir_message = check_cbir_health()
     if not cbir_healthy:
         logger.warning(f"CBIR service unavailable: {cbir_message}")
@@ -297,149 +76,133 @@ async def upload_images_batch(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Unable to upload images at this time. Please try again in a few minutes."
         )
-    
+
+
+def _discard_new_images(image_ids: List[str], user_id: str) -> None:
+    """Remove images created by the current request (records and files)."""
+    images_col = get_images_collection()
+    oids = [ObjectId(image_id) for image_id in image_ids]
+    for img in images_col.find({"_id": {"$in": oids}, "user_id": user_id}, {"file_path": 1}):
+        Path(img["file_path"]).unlink(missing_ok=True)
+    images_col.delete_many({"_id": {"$in": oids}, "user_id": user_id})
+
+
+@router.post("/upload", response_model=ImageResponse, status_code=status.HTTP_201_CREATED)
+def upload_image(
+    file: UploadFile = File(...),
+    document_id: str = Query(None, description="Optional document ID if image is related to a document"),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Upload an image file (for user-uploaded images)
+
+    - Validates the extension, size, quota, optional document ownership and
+      that the content is a decodable image
+    - Stores the file as images/uploaded/{_id}.{ext}; the client filename is
+      kept only as ``original_filename``
+    - Queues CBIR indexing
+
+    Raises:
+        HTTP 400: Invalid file, image content or document ID
+        HTTP 404: Document not found
+        HTTP 413: Storage quota would be exceeded
+        HTTP 503: CBIR service unavailable
+    """
+    _require_cbir_available()
+    user_id_str = str(current_user["_id"])
+    user_quota = current_user.get("storage_limit_bytes", DEFAULT_USER_STORAGE_QUOTA)
+
+    img_record = save_uploaded_image(current_user, file.filename, file.file, document_id=document_id)
+    image_id = str(img_record["_id"])
+    update_user_storage_in_db(user_id_str)
+
+    try:
+        cbir_index_image.delay(
+            user_id=user_id_str,
+            image_id=image_id,
+            image_path=img_record["file_path"],
+            labels=img_record.get("image_type", [])
+        )
+    except Exception as e:
+        # Log but don't fail the upload if CBIR indexing fails to queue
+        logger.warning(f"Failed to queue CBIR indexing for image {image_id}: {e}")
+
+    img_record["_id"] = image_id
+    img_record = augment_with_quota(img_record, user_id_str, user_quota)
+    return ImageResponse(**img_record)
+
+
+# ============================================================================
+# BATCH UPLOAD AND INDEXING STATUS ENDPOINTS
+# ============================================================================
+
+@router.post("/upload/batch", response_model=BatchUploadResponse, status_code=status.HTTP_202_ACCEPTED)
+def upload_images_batch(
+    files: List[UploadFile] = File(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    Upload multiple images in a single request with progress tracking.
+
+    - Validates and saves each image (invalid files are skipped)
+    - Stops accepting files once the storage quota is reached
+    - Starts a single Celery task to index all images with progress tracking
+    - Returns a job_id to poll for indexing progress
+
+    Raises:
+        HTTP 400: If no valid images provided
+        HTTP 413: If the first image already exceeds the storage quota
+    """
+    user_id_str = str(current_user["_id"])
+    _require_cbir_available()
+
     if not files:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="At least one image file is required"
         )
-    
-    images_col = get_images_collection()
-    uploaded_images = []
-    total_uploaded_size = 0
-    
-    # Process files one at a time to avoid memory issues
-    for file in files:
-        # Read file content
-        content = await file.read()
-        file_size = len(content)
-        
-        # Early validation before quota check
-        is_valid, error_msg = validate_image(file.filename, file_size)
-        if not is_valid:
-            logger.warning(f"Skipping invalid image {file.filename}: {error_msg}")
-            continue
-        
-        # Incremental quota check for this file
-        quota_ok, quota_error = check_storage_quota(
-            user_id_str, 
-            file_size + total_uploaded_size, 
-            user_quota
+    if len(files) > MAX_BATCH_UPLOAD_FILES:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Too many files in one batch (maximum {MAX_BATCH_UPLOAD_FILES})"
         )
-        if not quota_ok:
-            logger.warning(f"Skipping {file.filename}: {quota_error}")
-            # If we have already uploaded some files, continue with what we have
-            # Otherwise, this would fail the entire batch
-            if not uploaded_images:
-                raise HTTPException(
-                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                    detail=quota_error
-                )
-            break  # Stop processing more files, proceed with what we have
-        
+
+    uploaded_images = []
+    for file in files:
         try:
-            # Save image file
-            file_path, saved_size = save_image_file(
-                user_id_str,
-                content,
-                file.filename,
-                doc_id=None
-            )
-            
-            # Track uploaded size for incremental quota
-            total_uploaded_size += saved_size
-            
-            # Extract EXIF metadata
-            exif_metadata = extract_exif_metadata(file_path)
-            
-            # Create image record
-            img_data = {
-                "user_id": user_id_str,
-                "filename": file.filename,
-                "file_path": file_path,
-                "file_size": saved_size,
-                "source_type": "uploaded",
-                "document_id": None,
-                "pdf_page": None,
-                "page_bbox": None,
-                "extraction_mode": None,
-                "original_filename": file.filename,
-                "image_type": [],
-                "uploaded_date": datetime.utcnow(),
-                "exif_metadata": exif_metadata
-            }
-            
-            result = images_col.insert_one(img_data)
-            image_id = result.inserted_id
-            
-            # Rename file to use MongoDB _id
-            file_ext = Path(file.filename).suffix
-            new_filename = Path(file.filename).with_name(f"{image_id}{file_ext}")
-            
-            old_path = Path(file_path)
-            if not old_path.is_absolute():
-                old_path = Path.cwd() / old_path
-            new_full_path = old_path.parent / new_filename
-            try:
-                old_path.rename(new_full_path)
-                final_path = new_full_path
-                final_filename = new_filename
-            except OSError as rename_err:
-                # If rename fails, keep the original path/filename so DB stays consistent
-                logger.error(
-                    "Failed to rename image file from '%s' to '%s': %s",
-                    old_path,
-                    new_full_path,
-                    rename_err,
-                )
-                final_path = old_path
-                final_filename = Path(file_path).name
-            # Update MongoDB with the actual path
-            storage_path = convert_host_path_to_container(final_path)
-            images_col.update_one(
-                {"_id": image_id},
-                {"$set": {"filename": str(final_filename), "file_path": str(storage_path)}}
-            )
-            
-            uploaded_images.append({
-                "image_id": str(image_id),
-                "image_path": str(storage_path),
-                "labels": []
-            })
-            
-        except Exception as e:
-            logger.error(f"Failed to save image {file.filename}: {e}")
+            img_record = save_uploaded_image(current_user, file.filename, file.file)
+        except StorageQuotaExceededError as e:
+            if not uploaded_images:
+                raise
+            logger.warning(f"Stopping batch upload at {file.filename}: {e}")
+            break
+        except ValidationError as e:
+            logger.warning(f"Skipping invalid image {file.filename}: {e}")
             continue
-    
+        uploaded_images.append({
+            "image_id": str(img_record["_id"]),
+            "image_path": img_record["file_path"],
+            "labels": []
+        })
+
     if not uploaded_images:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="No valid images could be uploaded"
         )
-    
+    new_image_ids = [img["image_id"] for img in uploaded_images]
+    update_user_storage_in_db(user_id_str)
+
     # Create job log entry for the jobs dashboard (tracks the batch upload)
     main_job_id = create_job_log(
         user_id=user_id_str,
         job_type=JobType.BATCH_UPLOAD,
         title=f"Batch Upload ({len(uploaded_images)} images)",
-        input_data={"image_count": len(uploaded_images), "image_ids": [img["image_id"] for img in uploaded_images]}
+        input_data={"image_count": len(uploaded_images), "image_ids": new_image_ids}
     )
-    
-    # Update user storage
-    try:
-        update_user_storage_in_db(user_id_str)
-    except Exception as e:
-        logger.error(f"Failed to update user storage for user {user_id_str}: {e}")
-        complete_job(main_job_id, user_id_str, JobStatus.FAILED, errors=[f"Failed to update storage: {str(e)}"])
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to update user storage after upload"
-        )
-    
-    # Create indexing job in MongoDB
-    job_id = f"idx_{user_id_str}_{int(time.time())}"
-    jobs_col = get_indexing_jobs_collection()
-    
+
+    job_id = f"idx_{uuid.uuid4().hex}"
+    now = datetime.utcnow()
     job_doc = {
         "_id": job_id,
         "user_id": user_id_str,
@@ -451,35 +214,13 @@ async def upload_images_batch(
         "progress_percent": 0.0,
         "current_step": "Queued for indexing",
         "errors": [],
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "created_at": now,
+        "updated_at": now,
         "completed_at": None
     }
 
     try:
-
-        jobs_col.insert_one(job_doc)
-
-    except Exception as e:
-        logger.error(f"Failed to create indexing job document: {e}")
-        # Cleanup uploaded images to avoid orphaned images when job creation fails
-        for img in uploaded_images:
-            image_id = img.get("image_id")
-            if not image_id:
-                continue
-            try:
-                delete_image_and_artifacts(image_id=image_id, user_id=user_id_str)
-            except Exception as cleanup_err:
-                logger.error(
-                    f"Failed to clean up image {image_id} after job creation failure: {cleanup_err}"
-                )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create indexing job for uploaded images. Upload has been rolled back.",
-        )
-    
-    # Start Celery task for batch indexing with progress
-    try:
+        get_indexing_jobs_collection().insert_one(job_doc)
         cbir_index_batch_with_progress.delay(
             job_id=job_id,
             user_id=user_id_str,
@@ -487,41 +228,20 @@ async def upload_images_batch(
             main_job_id=main_job_id
         )
     except Exception as e:
-        logger.error(f"Failed to queue batch indexing task: {e}")
-        complete_job(main_job_id, user_id_str, JobStatus.FAILED, errors=[f"Failed to queue indexing: {str(e)}"])
-        # Update job status to failed
-        # Attempt to roll back uploaded images to avoid orphaned resources
-        cleanup_errors = []
-        for item in uploaded_images:
-            image_id = item.get("image_id")
-            if not image_id:
-                continue
-            try:
-                # delete_image_and_artifacts is expected to remove both DB records and files
-                delete_image_and_artifacts(image_id)
-            except Exception as cleanup_exc:
-                err_msg = f"Failed to clean up image {image_id} after indexing queue error: {cleanup_exc}"
-                logger.error(err_msg)
-                cleanup_errors.append(err_msg)
-        # Update job status to failed and record errors
-        error_messages = [f"Queueing error: {str(e)}"] + cleanup_errors
-        jobs_col.update_one(
-            {"_id": job_id},
-            {
-                "$set": {
-                    "status": IndexingJobStatus.FAILED.value,
-                    "current_step": "Failed to queue indexing task",
-                    "errors": error_messages,
-                    "updated_at": datetime.utcnow(),
-                    "completed_at": datetime.utcnow(),
-                }
-            }
+        logger.error(f"Failed to start batch indexing for user {user_id_str}: {e}")
+        _discard_new_images(new_image_ids, user_id_str)
+        update_user_storage_in_db(user_id_str)
+        complete_job(main_job_id, user_id_str, JobStatus.FAILED, errors=["Failed to queue indexing; upload rolled back"])
+        get_indexing_jobs_collection().delete_one({"_id": job_id})
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to start indexing for uploaded images. Upload has been rolled back.",
         )
-    
+
     return BatchUploadResponse(
         job_id=job_id,
         uploaded_count=len(uploaded_images),
-        image_ids=[img["image_id"] for img in uploaded_images],
+        image_ids=new_image_ids,
         message=f"{len(uploaded_images)} images uploaded, indexing in progress"
     )
 

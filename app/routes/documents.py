@@ -13,7 +13,6 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from fastapi.responses import FileResponse
 
 from app.celery_config import celery_app
-from app.config.settings import convert_host_path_to_container
 from app.config.storage_quota import DEFAULT_USER_STORAGE_QUOTA
 from app.db.mongodb import get_documents_collection, get_images_collection
 from app.schemas import (
@@ -23,23 +22,22 @@ from app.schemas import (
     WatermarkRemovalInitiationResponse,
     WatermarkRemovalRequest,
     WatermarkRemovalStatusResponse,
+    JobStatus,
     JobType,
 )
 from app.services.document_service import delete_document_and_artifacts
-from app.services.job_logger import create_job_log
+from app.services.job_logger import complete_job, create_job_log
 from app.services.quota_helpers import augment_with_quota
 from app.services.resource_helpers import get_owned_resource
+from app.services.upload_service import save_uploaded_pdf
 from app.services.watermark_removal_service import (
     get_watermark_removal_status,
     initiate_watermark_removal,
 )
 from app.tasks.image_extraction import extract_images_from_document
 from app.utils.file_storage import (
-    check_storage_quota,
     get_extraction_output_path,
-    save_pdf_file,
     update_user_storage_in_db,
-    validate_pdf,
 )
 from app.utils.docker_cbir import check_cbir_health
 from app.utils.security import get_current_user
@@ -51,174 +49,75 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 
 @router.post("/upload", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
-async def upload_document(
+def upload_document(
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user)
 ):
     """
     Upload a PDF document
-    
-    - Validates PDF file
-    - Checks storage quota before saving
-    - Saves to disk organized by user
-    - Creates document record in MongoDB
-    - Sets up extraction folder
-    - Triggers figure extraction placeholder
-    
-    Args:
-        file: PDF file to upload
-        current_user: Current authenticated user
-        
-    Returns:
-        DocumentResponse with document info
-        
+
+    - Validates the extension, size, quota and that the content is a PDF
+    - Stores the file as pdfs/{_id}.pdf; the client filename is kept only
+      as display metadata
+    - Queues image extraction
+
     Raises:
+        HTTP 400: Invalid file
         HTTP 413: If storage quota would be exceeded
+        HTTP 503: CBIR or the task queue is unavailable
     """
+    # Extracted images are indexed in CBIR, so block uploads while it is down
+    cbir_healthy, cbir_message = check_cbir_health()
+    if not cbir_healthy:
+        logger.warning(f"CBIR service unavailable: {cbir_message}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to upload documents at this time. Please try again in a few minutes."
+        )
+
+    user_id_str = str(current_user["_id"])
+    user_quota = current_user.get("storage_limit_bytes", DEFAULT_USER_STORAGE_QUOTA)
+
+    doc_record = save_uploaded_pdf(current_user, file.filename, file.file)
+    doc_oid = doc_record["_id"]
+    doc_id = str(doc_oid)
+    update_user_storage_in_db(user_id_str)
+
+    # Create extraction output directory
+    get_extraction_output_path(user_id_str, doc_id)
+
+    job_id = create_job_log(
+        user_id=user_id_str,
+        job_type=JobType.IMAGE_EXTRACTION,
+        title=f"Image Extraction: {doc_record['filename']}",
+        input_data={"document_id": doc_id, "filename": doc_record["filename"]}
+    )
+
+    documents_col = get_documents_collection()
     try:
-        # Pre-flight CBIR health check - block upload if CBIR is unavailable
-        # (extracted images won't be indexable)
-        cbir_healthy, cbir_message = check_cbir_health()
-        if not cbir_healthy:
-            logger.warning(f"CBIR service unavailable: {cbir_message}")
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Unable to upload documents at this time. Please try again in a few minutes."
-            )
-        
-        # Read file content
-        content = await file.read()
-        file_size = len(content)
-        
-        # Validate PDF
-        is_valid, error_msg = validate_pdf(file.filename, file_size)
-        if not is_valid:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-        
-        # Convert user_id to string
-        user_id_str = str(current_user["_id"])
-        
-        # Check storage quota BEFORE saving file
-        user_quota = current_user.get("storage_limit_bytes", DEFAULT_USER_STORAGE_QUOTA)
-        quota_ok, quota_error = check_storage_quota(user_id_str, file_size, user_quota)
-        if not quota_ok:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=quota_error
-            )
-        
-        # Save PDF file
-        try:
-            file_path, saved_size = save_pdf_file(
-                user_id_str,
-                content,
-                file.filename
-            )
-        except IOError as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to save file: {str(e)}"
-            )
-        
-        # Create document record in MongoDB
-        documents_col = get_documents_collection()
-        
-        doc_data = {
-            "user_id": user_id_str,
-            "filename": file.filename,
-            "file_path": file_path,
-            "file_size": saved_size,
-            "extraction_status": "pending",
-            "extracted_image_count": 0,
-            "extraction_errors": [],
-            "uploaded_date": datetime.utcnow()
-        }
-        
-        result = documents_col.insert_one(doc_data)
-        doc_id = str(result.inserted_id)
-        
-        # Rename file to use MongoDB _id
-        new_filename = Path(f"{doc_id}.pdf")
-        
-        # Construct full paths using pathlib
-        old_path = Path(file_path)
-        if not old_path.is_absolute():
-            old_path = Path.cwd() / old_path
-        
-        new_full_path = old_path.parent / new_filename
-        
-        try:
-            old_path.rename(new_full_path)
-        except OSError as e:
-            # Delete MongoDB doc since we can't rename the file
-            documents_col.delete_one({"_id": ObjectId(doc_id)})
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to rename uploaded file: {str(e)}"
-            )
-        
-        # Update MongoDB with new filename with container-compatible path
-        file_path = Path(file_path).parent / new_filename
-        storage_path = convert_host_path_to_container(file_path)
-        documents_col.update_one(
-            {"_id": ObjectId(doc_id)},
-            {
-                "$set": {
-                    "file_path": str(storage_path)
-                }
-            }
-        )
-        
-        # Create extraction output directory
-        get_extraction_output_path(user_id_str, doc_id)
-        
-        # Create job log entry for the jobs dashboard (pending state)
-        job_id = create_job_log(
-            user_id=user_id_str,
-            job_type=JobType.IMAGE_EXTRACTION,
-            title=f"Image Extraction: {new_filename}",
-            input_data={"document_id": doc_id, "filename": str(new_filename)}
-        )
-        
-        # ✨ QUEUE IMAGE EXTRACTION TASK (asynchronous - returns immediately)
         task = extract_images_from_document.delay(
             doc_id=doc_id,
             user_id=user_id_str,
-            pdf_path=str(storage_path),
+            pdf_path=doc_record["file_path"],
             job_id=job_id
         )
-        
-        # Store task_id in document for status checking
-        documents_col.update_one(
-            {"_id": ObjectId(doc_id)},
-            {"$set": {"task_id": task.id}}
-        )
-        
-        # Retrieve and return updated document with quota info
-        doc_record = documents_col.find_one({"_id": ObjectId(doc_id)})
-        doc_record["_id"] = doc_id  # Ensure _id is set for response
-
-
-
-        
-        # Add quota information to response
-        doc_record = augment_with_quota(doc_record, user_id_str, user_quota)
-        
-        # Update user storage in database for easy access
-        update_user_storage_in_db(user_id_str)
-        
-        return DocumentResponse(**doc_record)
-    
-    except HTTPException:
-        raise
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Upload failed: {str(e)}"
+        logger.error(f"Failed to queue image extraction for document {doc_id}: {e}")
+        documents_col.update_one(
+            {"_id": doc_oid},
+            {"$set": {"extraction_status": "failed", "extraction_errors": ["Task queue unavailable"]}}
         )
+        complete_job(job_id, user_id_str, JobStatus.FAILED, errors=["Task queue unavailable"])
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Document saved, but image extraction could not be started. Please try again later."
+        )
+
+    documents_col.update_one({"_id": doc_oid}, {"$set": {"task_id": task.id}})
+    doc_record["task_id"] = task.id
+    doc_record["_id"] = doc_id
+    doc_record = augment_with_quota(doc_record, user_id_str, user_quota)
+    return DocumentResponse(**doc_record)
 
 
 @router.get("", response_model=PaginatedDocumentResponse)

@@ -143,14 +143,11 @@ def extract_images_from_document(self, doc_id: str, user_id: str, pdf_path: str,
                     # The extracted images contains the bbox of their location in the PDF,
                     # we will rename each image to its MongoDB _id for uniqueness
                     
-                    file_ext = Path(image_file['filename']).suffix
-                    new_filename = Path(image_file['filename']).with_name(f"{image_id}{file_ext}")
-                    
+                    # Name the file after its id inside the extraction directory; the
+                    # extractor's filename only contributes its extension.
                     old_path = Path(image_file['path'])
-                    
-                    if not old_path.is_absolute():
-                        old_path = Path.cwd() / old_path
-                    
+                    file_ext = old_path.suffix.lower()
+                    new_filename = f"{image_id}{file_ext}"
                     new_path = old_path.parent / new_filename
 
                     try:

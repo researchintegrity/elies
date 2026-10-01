@@ -6,6 +6,7 @@ Fixtures for fast unit tests that need no running services.
   to Redis (see the ``celery_calls`` fixture).
 - The CBIR health check and ExifTool are stubbed out.
 """
+import io
 import sys
 import uuid
 from types import SimpleNamespace
@@ -15,6 +16,7 @@ import pytest
 from celery.app.task import Task
 from celery.result import AsyncResult
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import app.utils.docker_cbir as docker_cbir
 import app.utils.metadata_parser as metadata_parser
@@ -22,11 +24,13 @@ from app.celery_config import celery_app
 from app.db import mongodb
 from app.main import app
 
-# Smallest valid PNG (1x1 transparent pixel)
-PNG_BYTES = bytes.fromhex(
-    "89504e470d0a1a0a0000000d4948445200000001000000010806000000"
-    "1f15c4890000000d49444154789c6360000002000154a24f5d0000000049454e44ae426082"
-)
+def _png_bytes(size=(8, 8), color=(200, 30, 30)) -> bytes:
+    buffer = io.BytesIO()
+    Image.new("RGB", size, color).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+PNG_BYTES = _png_bytes()
 # Minimal PDF header, enough for extension/size validation
 PDF_BYTES = b"%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF\n"
 
