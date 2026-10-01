@@ -254,6 +254,9 @@ MAX_IMAGE_PIXELS = _env_int("MAX_IMAGE_PIXELS", 200_000_000)
 # Maximum number of files accepted by one batch image upload request
 MAX_BATCH_UPLOAD_FILES = _env_int("MAX_BATCH_UPLOAD_FILES", 200)
 
+# Maximum ids returned by GET /images/ids ("select all")
+MAX_SELECT_ALL_IDS = _env_int("MAX_SELECT_ALL_IDS", 10000)
+
 # Password hashing settings
 BCRYPT_ROUNDS = _env_int("BCRYPT_ROUNDS", 12)  # bcrypt cost factor (tests lower it for speed)
 

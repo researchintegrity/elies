@@ -1,7 +1,6 @@
 """
 Image upload routes for extracted and user-uploaded image management
 """
-import re
 import logging
 import math
 import uuid
@@ -19,6 +18,7 @@ from app.config.settings import (
     DEFAULT_THUMBNAIL_SIZE,
     MAX_BATCH_UPLOAD_FILES,
     MAX_IMAGE_PIXELS,
+    MAX_SELECT_ALL_IDS,
     THUMBNAIL_JPEG_QUALITY,
 )
 from app.config.storage_quota import DEFAULT_USER_STORAGE_QUOTA
@@ -40,6 +40,7 @@ from app.schemas import (
     JobStatus,
 )
 from app.services.image_service import (
+    build_image_query,
     delete_image_and_artifacts,
     list_images as list_images_service,
 )
@@ -336,53 +337,46 @@ def list_images(
     user_id_str = str(current_user["_id"])
     user_quota = current_user.get("storage_limit_bytes", DEFAULT_USER_STORAGE_QUOTA)
     
-    try:
-        # Pagination
-        actual_offset = (page - 1) * per_page
-        actual_limit = per_page
-        
-        # Parse image_type from comma-separated string
-        parsed_image_type = [t.strip() for t in image_type.split(",")] if image_type else None
-        
-        # Use service to get images with all filter parameters
-        result = list_images_service(
-            user_id=user_id_str,
-            source_type=source_type,
-            document_id=document_id,
-            image_type=parsed_image_type,
-            date_from=date_from,
-            date_to=date_to,
-            search=search,
-            flagged=flagged,
-            linked_to_image_id=linked_to_image_id,
-            include_annotated=include_annotated,
-            limit=actual_limit,
-            offset=actual_offset
-        )
-        
-        # Map to response models with quota info (OPTIMIZED: calculate quota once)
-        augmented_images = augment_list_with_quota(result["images"], user_id_str, user_quota)
-        responses = [ImageResponse(**img) for img in augmented_images]
-        
-        # Return paginated response with metadata
-        total = result["total"]
-        total_pages = math.ceil(total / per_page) if total > 0 else 1
-        
-        return PaginatedImageResponse(
-            items=responses,
-            total=total,
-            page=page,
-            per_page=per_page,
-            total_pages=total_pages,
-            has_next=page < total_pages,
-            has_prev=page > 1
-        )
+    # Pagination
+    actual_offset = (page - 1) * per_page
+    actual_limit = per_page
     
-    except ValueError as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e)
-        )
+    # Parse image_type from comma-separated string
+    parsed_image_type = [t.strip() for t in image_type.split(",")] if image_type else None
+    
+    # Use service to get images with all filter parameters
+    result = list_images_service(
+        user_id=user_id_str,
+        source_type=source_type,
+        document_id=document_id,
+        image_type=parsed_image_type,
+        date_from=date_from,
+        date_to=date_to,
+        search=search,
+        flagged=flagged,
+        linked_to_image_id=linked_to_image_id,
+        include_annotated=include_annotated,
+        limit=actual_limit,
+        offset=actual_offset
+    )
+    
+    # Map to response models with quota info (OPTIMIZED: calculate quota once)
+    augmented_images = augment_list_with_quota(result["images"], user_id_str, user_quota)
+    responses = [ImageResponse(**img) for img in augmented_images]
+    
+    # Return paginated response with metadata
+    total = result["total"]
+    total_pages = math.ceil(total / per_page) if total > 0 else 1
+    
+    return PaginatedImageResponse(
+        items=responses,
+        total=total,
+        page=page,
+        per_page=per_page,
+        total_pages=total_pages,
+        has_next=page < total_pages,
+        has_prev=page > 1
+    )
 
 
 @router.get("/tags", response_model=List[str])
@@ -416,64 +410,45 @@ def get_all_image_ids(
     image_type: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    search: Optional[str] = None,
+    search: Optional[str] = Query(None, max_length=200),
     source_type: Optional[str] = None,
+    document_id: Optional[str] = None,
+    flagged: Optional[bool] = None,
+    linked_to_image_id: Optional[str] = None,
+    include_annotated: bool = False,
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Get all image IDs for the current user in a single request.
-    
-    This is optimized for "Select All" operations where only IDs are needed.
-    Returns a lightweight response with just IDs instead of full image objects.
-    
-    Supports the same filters as the main /images endpoint.
-    
+    Get the IDs of all images matching the gallery filters ("Select All").
+
+    Accepts the same filters as GET /images and applies them identically.
+    At most MAX_SELECT_ALL_IDS ids are returned; ``truncated`` tells whether
+    more matched.
+
     Returns:
-        {"ids": ["id1", "id2", ...], "count": N}
+        {"ids": ["id1", "id2", ...], "count": N, "truncated": bool}
     """
-    user_id_str = str(current_user["_id"])
-    images_col = get_images_collection()
-    
-    # Build query with same logic as list_images
-    query = {"user_id": user_id_str}
-    
-    # Apply filters
-    if image_type:
-        tags = [t.strip() for t in image_type.split(",") if t.strip()]
-        if tags:
-            query["image_type"] = {"$in": tags}
-    
-    if source_type and source_type != "all":
-        query["source_type"] = source_type
-    
-    if date_from:
-        try:
-            from datetime import datetime
-            dt = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
-            query.setdefault("created_at", {})["$gte"] = dt
-        except ValueError:
-            pass
-    
-    if date_to:
-        try:
-            from datetime import datetime
-            dt = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
-            query.setdefault("created_at", {})["$lte"] = dt
-        except ValueError:
-            pass
-    
-    if search:
-        search_regex = {"$regex": re.escape(search), "$options": "i"}
-        query["$or"] = [
-            {"filename": search_regex},
-            {"original_filename": search_regex}
-        ]
-    
-    # Only fetch _id field for efficiency
-    cursor = images_col.find(query, {"_id": 1})
+    parsed_image_type = [t.strip() for t in image_type.split(",") if t.strip()] if image_type else None
+    query = build_image_query(
+        user_id=str(current_user["_id"]),
+        source_type=None if source_type == "all" else source_type,
+        document_id=document_id,
+        image_type=parsed_image_type,
+        date_from=date_from,
+        date_to=date_to,
+        search=search,
+        flagged=flagged,
+        linked_to_image_id=linked_to_image_id,
+        include_annotated=include_annotated,
+    )
+
+    cursor = get_images_collection().find(query, {"_id": 1}).limit(MAX_SELECT_ALL_IDS + 1)
     ids = [str(doc["_id"]) for doc in cursor]
-    
-    return {"ids": ids, "count": len(ids)}
+    truncated = len(ids) > MAX_SELECT_ALL_IDS
+    ids = ids[:MAX_SELECT_ALL_IDS]
+
+    return {"ids": ids, "count": len(ids), "truncated": truncated}
+
 
 @router.get("/{image_id}", response_model=ImageResponse)
 def get_image(
@@ -741,58 +716,36 @@ def initiate_panel_extraction_endpoint(
         HTTP 400: If validation fails
         HTTP 404: If image not found
     """
-    try:
-        user_id = current_user.get("_id")
-        
-        # Pre-flight CBIR health check - block extraction if CBIR is unavailable
-        cbir_healthy, cbir_message = check_cbir_health()
-        if not cbir_healthy:
-            logger.warning(f"CBIR service unavailable: {cbir_message}")
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Unable to upload images at this time. Please try again in a few minutes."
-            )
-        
-        # Validate request
-        if not request.image_ids:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="At least one image ID is required"
-            )
-        
-        # Initiate extraction
-        result = initiate_panel_extraction(
-            image_ids=request.image_ids,
-            user_id=str(user_id)
-        )
-        
-        return PanelExtractionInitiationResponse(
-            task_id=result["task_id"],
-            status=result["status"],
-            image_ids=result["image_ids"],
-            message=result["message"]
-        )
-        
-    except ValueError as e:
-        error_msg = str(e)
-        if "not found" in error_msg or "does not belong" in error_msg:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=error_msg
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-    except HTTPException:
-        # Re-raise HTTP exceptions (including 503 from CBIR check)
-        raise
-    except Exception as e:
+    user_id = current_user.get("_id")
+    
+    # Pre-flight CBIR health check - block extraction if CBIR is unavailable
+    cbir_healthy, cbir_message = check_cbir_health()
+    if not cbir_healthy:
+        logger.warning(f"CBIR service unavailable: {cbir_message}")
         raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to initiate panel extraction: {str(e)}"
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to upload images at this time. Please try again in a few minutes."
         )
+    
+    # Validate request
+    if not request.image_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one image ID is required"
+        )
+    
+    # Initiate extraction
+    result = initiate_panel_extraction(
+        image_ids=request.image_ids,
+        user_id=str(user_id)
+    )
+    
+    return PanelExtractionInitiationResponse(
+        task_id=result["task_id"],
+        status=result["status"],
+        image_ids=result["image_ids"],
+        message=result["message"]
+    )
 
 
 @router.get(
@@ -874,58 +827,36 @@ def get_panels_from_image(
     Raises:
         HTTP 404: If source image not found
     """
-    try:
-        user_id = str(current_user.get("_id"))
-        
-        # Verify source image exists and belongs to user
-        images_col = get_images_collection()
-        source_image = images_col.find_one(
-            {"_id": ObjectId(image_id), "user_id": user_id}
-        )
-        
-        if not source_image:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Source image not found: {image_id}"
-            )
-        
-        # Get all panels from this source image
-        panels = get_panels_by_source_image(
-            source_image_id=image_id,
-            user_id=user_id
-        )
-        
-        # Convert to response format
-        response_panels = []
-        for panel_doc in panels:
-            response_panels.append(ImageResponse(
-                _id=str(panel_doc.get("_id")),
-                user_id=panel_doc.get("user_id"),
-                filename=panel_doc.get("filename"),
-                file_path=panel_doc.get("file_path"),
-                file_size=panel_doc.get("file_size"),
-                source_type=panel_doc.get("source_type"),
-                document_id=panel_doc.get("document_id"),
-                source_image_id=panel_doc.get("source_image_id"),
-                panel_id=panel_doc.get("panel_id"),
-                panel_type=panel_doc.get("panel_type"),
-                bbox=panel_doc.get("bbox"),
-                uploaded_date=panel_doc.get("uploaded_date")
-            ))
-        
-        return response_panels
-        
-    except Exception as e:
-        # Check if it's an invalid ObjectId
-        if "invalid ObjectId" in str(e).lower():
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid image ID: {image_id}"
-            )
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve panels: {str(e)}"
-        )
+    user_id = str(current_user.get("_id"))
+    
+    # Verify source image exists and belongs to user
+    get_owned_resource(get_images_collection, image_id, user_id, "Image")
+    
+    # Get all panels from this source image
+    panels = get_panels_by_source_image(
+        source_image_id=image_id,
+        user_id=user_id
+    )
+    
+    # Convert to response format
+    response_panels = []
+    for panel_doc in panels:
+        response_panels.append(ImageResponse(
+            _id=str(panel_doc.get("_id")),
+            user_id=panel_doc.get("user_id"),
+            filename=panel_doc.get("filename"),
+            file_path=panel_doc.get("file_path"),
+            file_size=panel_doc.get("file_size"),
+            source_type=panel_doc.get("source_type"),
+            document_id=panel_doc.get("document_id"),
+            source_image_id=panel_doc.get("source_image_id"),
+            panel_id=panel_doc.get("panel_id"),
+            panel_type=panel_doc.get("panel_type"),
+            bbox=panel_doc.get("bbox"),
+            uploaded_date=panel_doc.get("uploaded_date")
+        ))
+    
+    return response_panels
 
 
 # ============================================================================
@@ -957,84 +888,62 @@ def add_image_types(
         HTTP 400: If image_id is invalid
         HTTP 404: If image not found or doesn't belong to user
     """
-    try:
-        user_id = str(current_user.get("_id"))
-        images_col = get_images_collection()
-        
-        # Verify image exists and belongs to user
-        image_doc = images_col.find_one(
-            {"_id": ObjectId(image_id), "user_id": user_id}
+    user_id = str(current_user.get("_id"))
+    images_col = get_images_collection()
+    
+    # Verify image exists and belongs to user
+    image_doc = get_owned_resource(get_images_collection, image_id, user_id, "Image")
+    
+    # Get existing types and merge with new types (union, no duplicates)
+    existing_types = image_doc.get("image_type", [])
+    new_types = request.types
+    
+    # Merge and deduplicate
+    merged_types = list(set(existing_types + new_types))
+    merged_types.sort()  # Sort for consistency
+    
+    # Update in database
+    images_col.update_one(
+        {"_id": ObjectId(image_id)},
+        {"$set": {"image_type": merged_types}}
+    )
+    
+    # Update CBIR labels asynchronously (if image has file_path)
+    if image_doc.get("file_path"):
+        cbir_update_labels.delay(
+            user_id=user_id,
+            image_id=image_id,
+            image_path=image_doc["file_path"],
+            labels=merged_types
         )
-        
-        if not image_doc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Image not found: {image_id}"
-            )
-        
-        # Get existing types and merge with new types (union, no duplicates)
-        existing_types = image_doc.get("image_type", [])
-        new_types = request.types
-        
-        # Merge and deduplicate
-        merged_types = list(set(existing_types + new_types))
-        merged_types.sort()  # Sort for consistency
-        
-        # Update in database
-        images_col.update_one(
-            {"_id": ObjectId(image_id)},
-            {"$set": {"image_type": merged_types}}
-        )
-        
-        # Update CBIR labels asynchronously (if image has file_path)
-        if image_doc.get("file_path"):
-            cbir_update_labels.delay(
-                user_id=user_id,
-                image_id=image_id,
-                image_path=image_doc["file_path"],
-                labels=merged_types
-            )
-        
-        # Fetch updated document
-        updated_doc = images_col.find_one({"_id": ObjectId(image_id)})
-        
-        # Convert to response
-        response = ImageResponse(
-            _id=str(updated_doc.get("_id")),
-            user_id=updated_doc.get("user_id"),
-            filename=updated_doc.get("filename"),
-            file_path=updated_doc.get("file_path"),
-            file_size=updated_doc.get("file_size"),
-            source_type=updated_doc.get("source_type"),
-            document_id=updated_doc.get("document_id"),
-            source_image_id=updated_doc.get("source_image_id"),
-            panel_id=updated_doc.get("panel_id"),
-            panel_type=updated_doc.get("panel_type"),
-            bbox=updated_doc.get("bbox"),
-            pdf_page=updated_doc.get("pdf_page"),
-            page_bbox=updated_doc.get("page_bbox"),
-            extraction_mode=updated_doc.get("extraction_mode"),
-            original_filename=updated_doc.get("original_filename"),
-            image_type=updated_doc.get("image_type", []),
-            uploaded_date=updated_doc.get("uploaded_date"),
-            user_storage_used=updated_doc.get("user_storage_used", 0),
-            user_storage_remaining=updated_doc.get("user_storage_remaining", DEFAULT_USER_STORAGE_QUOTA)
-        )
-        
-        return response
-        
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid image ID: {image_id}"
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to add types: {str(e)}"
-        )
+    
+    # Fetch updated document
+    updated_doc = images_col.find_one({"_id": ObjectId(image_id)})
+    
+    # Convert to response
+    response = ImageResponse(
+        _id=str(updated_doc.get("_id")),
+        user_id=updated_doc.get("user_id"),
+        filename=updated_doc.get("filename"),
+        file_path=updated_doc.get("file_path"),
+        file_size=updated_doc.get("file_size"),
+        source_type=updated_doc.get("source_type"),
+        document_id=updated_doc.get("document_id"),
+        source_image_id=updated_doc.get("source_image_id"),
+        panel_id=updated_doc.get("panel_id"),
+        panel_type=updated_doc.get("panel_type"),
+        bbox=updated_doc.get("bbox"),
+        pdf_page=updated_doc.get("pdf_page"),
+        page_bbox=updated_doc.get("page_bbox"),
+        extraction_mode=updated_doc.get("extraction_mode"),
+        original_filename=updated_doc.get("original_filename"),
+        image_type=updated_doc.get("image_type", []),
+        uploaded_date=updated_doc.get("uploaded_date"),
+        user_storage_used=updated_doc.get("user_storage_used", 0),
+        user_storage_remaining=updated_doc.get("user_storage_remaining", DEFAULT_USER_STORAGE_QUOTA)
+    )
+    
+    return response
 
 
 @router.delete("/{image_id}/types/{type_name}", response_model=ImageResponse, status_code=status.HTTP_200_OK)
@@ -1061,80 +970,58 @@ def remove_image_type(
         HTTP 400: If image_id is invalid
         HTTP 404: If image not found or doesn't belong to user
     """
-    try:
-        user_id = str(current_user.get("_id"))
-        images_col = get_images_collection()
-        
-        # Verify image exists and belongs to user
-        image_doc = images_col.find_one(
-            {"_id": ObjectId(image_id), "user_id": user_id}
+    user_id = str(current_user.get("_id"))
+    images_col = get_images_collection()
+    
+    # Verify image exists and belongs to user
+    image_doc = get_owned_resource(get_images_collection, image_id, user_id, "Image")
+    
+    # Get existing types and remove the specified type
+    existing_types = image_doc.get("image_type", [])
+    updated_types = [t for t in existing_types if t != type_name]
+    
+    # Update in database
+    images_col.update_one(
+        {"_id": ObjectId(image_id)},
+        {"$set": {"image_type": updated_types}}
+    )
+    
+    # Update CBIR labels asynchronously (if image has file_path)
+    if image_doc.get("file_path"):
+        cbir_update_labels.delay(
+            user_id=user_id,
+            image_id=image_id,
+            image_path=image_doc["file_path"],
+            labels=updated_types
         )
-        
-        if not image_doc:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Image not found: {image_id}"
-            )
-        
-        # Get existing types and remove the specified type
-        existing_types = image_doc.get("image_type", [])
-        updated_types = [t for t in existing_types if t != type_name]
-        
-        # Update in database
-        images_col.update_one(
-            {"_id": ObjectId(image_id)},
-            {"$set": {"image_type": updated_types}}
-        )
-        
-        # Update CBIR labels asynchronously (if image has file_path)
-        if image_doc.get("file_path"):
-            cbir_update_labels.delay(
-                user_id=user_id,
-                image_id=image_id,
-                image_path=image_doc["file_path"],
-                labels=updated_types
-            )
-        
-        # Fetch updated document
-        updated_doc = images_col.find_one({"_id": ObjectId(image_id)})
-        
-        # Convert to response
-        response = ImageResponse(
-            _id=str(updated_doc.get("_id")),
-            user_id=updated_doc.get("user_id"),
-            filename=updated_doc.get("filename"),
-            file_path=updated_doc.get("file_path"),
-            file_size=updated_doc.get("file_size"),
-            source_type=updated_doc.get("source_type"),
-            document_id=updated_doc.get("document_id"),
-            source_image_id=updated_doc.get("source_image_id"),
-            panel_id=updated_doc.get("panel_id"),
-            panel_type=updated_doc.get("panel_type"),
-            bbox=updated_doc.get("bbox"),
-            pdf_page=updated_doc.get("pdf_page"),
-            page_bbox=updated_doc.get("page_bbox"),
-            extraction_mode=updated_doc.get("extraction_mode"),
-            original_filename=updated_doc.get("original_filename"),
-            image_type=updated_doc.get("image_type", []),
-            uploaded_date=updated_doc.get("uploaded_date"),
-            user_storage_used=updated_doc.get("user_storage_used", 0),
-            user_storage_remaining=updated_doc.get("user_storage_remaining", DEFAULT_USER_STORAGE_QUOTA)
-        )
-        
-        return response
-        
-    except ValueError:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Invalid image ID: {image_id}"
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to remove type: {str(e)}"
-        )
+    
+    # Fetch updated document
+    updated_doc = images_col.find_one({"_id": ObjectId(image_id)})
+    
+    # Convert to response
+    response = ImageResponse(
+        _id=str(updated_doc.get("_id")),
+        user_id=updated_doc.get("user_id"),
+        filename=updated_doc.get("filename"),
+        file_path=updated_doc.get("file_path"),
+        file_size=updated_doc.get("file_size"),
+        source_type=updated_doc.get("source_type"),
+        document_id=updated_doc.get("document_id"),
+        source_image_id=updated_doc.get("source_image_id"),
+        panel_id=updated_doc.get("panel_id"),
+        panel_type=updated_doc.get("panel_type"),
+        bbox=updated_doc.get("bbox"),
+        pdf_page=updated_doc.get("pdf_page"),
+        page_bbox=updated_doc.get("page_bbox"),
+        extraction_mode=updated_doc.get("extraction_mode"),
+        original_filename=updated_doc.get("original_filename"),
+        image_type=updated_doc.get("image_type", []),
+        uploaded_date=updated_doc.get("uploaded_date"),
+        user_storage_used=updated_doc.get("user_storage_used", 0),
+        user_storage_remaining=updated_doc.get("user_storage_remaining", DEFAULT_USER_STORAGE_QUOTA)
+    )
+    
+    return response
 
 
 @router.get("/types/all", status_code=status.HTTP_200_OK)
@@ -1154,28 +1041,23 @@ def list_all_image_types(
     Returns:
         ImageTypeListResponse with list of types and count
     """
-    try:
-        user_id = str(current_user.get("_id"))
-        images_col = get_images_collection()
-        
-        # Aggregate all image_type values for this user
-        pipeline = [
-            {"$match": {"user_id": user_id}},
-            {"$unwind": "$image_type"},
-            {"$group": {"_id": "$image_type"}},
-            {"$sort": {"_id": 1}}
-        ]
-        
-        results = list(images_col.aggregate(pipeline))
-        types = [doc["_id"] for doc in results]
-        
-        return {
-            "types": types,
-            "count": len(types)
-        }
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve image types: {str(e)}"
-        )
+    user_id = str(current_user.get("_id"))
+    images_col = get_images_collection()
+    
+    # Aggregate all image_type values for this user
+    pipeline = [
+        {"$match": {"user_id": user_id}},
+        {"$unwind": "$image_type"},
+        {"$group": {"_id": "$image_type"}},
+        {"$sort": {"_id": 1}}
+    ]
+    
+    results = list(images_col.aggregate(pipeline))
+    types = [doc["_id"] for doc in results]
+    
+    return {
+        "types": types,
+        "count": len(types)
+    }
+
+

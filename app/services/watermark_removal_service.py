@@ -3,9 +3,12 @@ Watermark removal service for handling watermark removal operations
 Provides business logic for watermark removal CRUD operations
 """
 
-from bson import ObjectId
+from datetime import datetime
 from typing import Dict
+
 from app.db.mongodb import get_documents_collection
+from app.exceptions import ValidationError
+from app.services.resource_helpers import get_owned_resource
 from app.schemas import JobType
 from app.services.job_logger import attach_celery_task, create_job_log
 from app.tasks.watermark_removal import remove_watermark_from_document
@@ -41,33 +44,23 @@ def initiate_watermark_removal(
         Dictionary with task info and document details
         
     Raises:
-        ValueError: If document not found, validation fails, or mode invalid
+        ValidationError: Invalid mode or not a PDF
+        ResourceNotFoundError: Document not found or not owned by the user
     """
     documents_col = get_documents_collection()
     
     # Validate aggressiveness mode
     if aggressiveness_mode not in [1, 2, 3]:
-        raise ValueError(
+        raise ValidationError(
             f"Invalid aggressiveness mode: {aggressiveness_mode}. Must be 1, 2, or 3."
         )
-    
-    # Verify document exists and belongs to user
-    try:
-        doc_oid = ObjectId(document_id)
-    except Exception:
-        raise ValueError("Invalid document ID format")
-    
-    doc = documents_col.find_one({
-        "_id": doc_oid,
-        "user_id": user_id
-    })
-    
-    if not doc:
-        raise ValueError("Document not found")
-    
+
+    doc = get_owned_resource(get_documents_collection, document_id, user_id, "Document")
+    doc_oid = doc["_id"]
+
     # Check if document is a PDF
     if not doc.get("file_path", "").lower().endswith(".pdf"):
-        raise ValueError("Document is not a PDF file")
+        raise ValidationError("Document is not a PDF file")
     
     # Resolve the stored file path to absolute path for worker container
     pdf_path = str(convert_host_path_to_container(doc['file_path']))
@@ -103,7 +96,7 @@ def initiate_watermark_removal(
         {
             "$set": {
                 "watermark_removal_task_id": task.id,
-                "watermark_removal_requested_at": __import__("datetime").datetime.utcnow(),
+                "watermark_removal_requested_at": datetime.utcnow(),
                 "watermark_removal_status": "queued",
                 "watermark_removal_mode": aggressiveness_mode
             }
@@ -136,24 +129,12 @@ def get_watermark_removal_status(
         Dictionary with status information
         
     Raises:
-        ValueError: If document not found
+        ResourceNotFoundError: Document not found or not owned by the user
     """
     documents_col = get_documents_collection()
     
-    # Verify document exists and belongs to user
-    try:
-        doc_oid = ObjectId(document_id)
-    except Exception:
-        raise ValueError("Invalid document ID format")
-    
-    doc = documents_col.find_one({
-        "_id": doc_oid,
-        "user_id": user_id
-    })
-    
-    if not doc:
-        raise ValueError("Document not found")
-    
+    doc = get_owned_resource(get_documents_collection, document_id, user_id, "Document")
+
     # Extract watermark removal information
     status = doc.get("watermark_removal_status", "not_started")
     

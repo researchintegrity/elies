@@ -25,6 +25,7 @@ celery_app = Celery(
         "app.tasks.cbir",
         "app.tasks.copy_move_detection",
         "app.tasks.image_extraction",
+        "app.tasks.maintenance",
         "app.tasks.panel_extraction",
         "app.tasks.provenance",
         "app.tasks.trufor",

@@ -417,50 +417,15 @@ def initiate_watermark_removal_endpoint(
         HTTP 404: Document not found
         HTTP 500: Server error
     """
-    try:
-        user_id_str = str(current_user["_id"])
-        
-        result = initiate_watermark_removal(
-            document_id=doc_id,
-            user_id=user_id_str,
-            aggressiveness_mode=request.aggressiveness_mode
-        )
-        
-        return result
+    user_id_str = str(current_user["_id"])
     
-    except ValueError as e:
-        error_msg = str(e)
-        if "Invalid aggressiveness mode" in error_msg:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-        elif "Invalid document ID" in error_msg:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-        elif "Document not found" in error_msg:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=error_msg
-            )
-        elif "not a PDF" in error_msg:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-    except Exception as e:
-        logger.error(f"Error initiating watermark removal: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to initiate watermark removal: {str(e)}"
-        )
+    result = initiate_watermark_removal(
+        document_id=doc_id,
+        user_id=user_id_str,
+        aggressiveness_mode=request.aggressiveness_mode
+    )
+    
+    return result
 
 
 @router.get(
@@ -500,36 +465,13 @@ def get_watermark_removal_status_endpoint(
         HTTP 404: Document not found
         HTTP 500: Server error
     """
-    try:
-        user_id_str = str(current_user["_id"])
-        
-        status_info = get_watermark_removal_status(
-            document_id=doc_id,
-            user_id=user_id_str
-        )
-        
-        return status_info
+    user_id_str = str(current_user["_id"])
     
-    except ValueError as e:
-        error_msg = str(e)
-        if "Invalid document ID" in error_msg:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-        elif "Document not found" in error_msg:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=error_msg
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-    except Exception as e:
-        logger.error(f"Error retrieving watermark removal status: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve watermark removal status: {str(e)}"
-        )
+    status_info = get_watermark_removal_status(
+        document_id=doc_id,
+        user_id=user_id_str
+    )
+    
+    return status_info
+
+

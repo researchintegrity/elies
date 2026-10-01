@@ -116,36 +116,40 @@ def get_thumbnail_path(user_id: str, image_id: str) -> Path:
     return thumb_dir / f"{image_id}.jpg"
 
 
+_ANALYSIS_FOLDERS = {
+    "single_image_copy_move": "cmfd",
+    "cross_image_copy_move": "cmfd_cross",
+    "trufor": "trufor",
+    "screening_tool": "screening_tool",  # Client-side screening tool results (ELA, noise, etc.)
+}
+
+
+def analysis_output_dir(user_id: str, analysis_id: str, analysis_type: str) -> Path:
+    """
+    Where an analysis stores its result files (the directory is not created):
+    <workspace>/{user_id}/analyses/{type folder}/{analysis_id}/
+    """
+    analysis_type = getattr(analysis_type, "value", analysis_type)
+    folder_name = _ANALYSIS_FOLDERS.get(analysis_type, analysis_type)
+    return UPLOAD_DIR / user_id / "analyses" / folder_name / analysis_id
+
+
 def get_analysis_output_path(user_id: str, analysis_id: str, analysis_type: str) -> Path:
     """
-    Get the path where analysis results should be saved
-    
-    Results are saved to:
-    <workspace-env>/{user_id}/analyses/{analysis_type}/{analysis_id}/
-    
+    Get (and create) the directory where analysis results should be saved.
+
     Args:
         user_id: User ID
         analysis_id: Analysis ID
         analysis_type: Type of analysis (e.g., 'single_image_copy_move', 'cross_image_copy_move', 'screening_tool')
-        
+
     Returns:
         Path object for analysis directory
     """
-    # Map analysis types to folder names if needed, or use type directly
-    if analysis_type == "single_image_copy_move":
-        folder_name = "cmfd"
-    elif analysis_type == "cross_image_copy_move":
-        folder_name = "cmfd_cross"
-    elif analysis_type == "trufor":
-        folder_name = "trufor"
-    elif analysis_type == "screening_tool":
-        folder_name = "screening_tool"  # Client-side screening tool results (ELA, noise, etc.)
-    else:
-        folder_name = analysis_type
-    
-    analysis_path = UPLOAD_DIR / user_id / "analyses" / folder_name / analysis_id
+    analysis_path = analysis_output_dir(user_id, analysis_id, analysis_type)
     analysis_path.mkdir(parents=True, exist_ok=True)
     return analysis_path
+
 
 def delete_file(file_path: str) -> Tuple[bool, Optional[str]]:
     """

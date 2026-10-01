@@ -5,9 +5,10 @@ import logging
 from typing import Dict, List, Any, Optional
 from bson import ObjectId
 from app.db.mongodb import get_images_collection
-from app.exceptions import ResourceNotFoundError
-from app.schemas import JobType
-from app.services.job_logger import attach_celery_task, create_job_log, find_job_by_celery_task
+from app.exceptions import ExternalServiceError, ResourceNotFoundError, ValidationError
+from app.services.resource_helpers import get_owned_resource
+from app.schemas import JobStatus, JobType
+from app.services.job_logger import attach_celery_task, complete_job, create_job_log, find_job_by_celery_task
 from app.tasks.panel_extraction import extract_panels_from_images
 logger = logging.getLogger(__name__)
 
@@ -31,70 +32,25 @@ def initiate_panel_extraction(
         }
 
     Raises:
-        ValueError: If validation fails
+        ValidationError / ResourceNotFoundError: If validation fails
     """
-    images_col = get_images_collection()
-
-    # Validate images
     image_paths = []
     validated_ids = []
-
-    for img_id in image_ids:
-        try:
-            # Try to validate as a direct ObjectId first
-            image_doc = None
-            try:
-                image_doc = images_col.find_one(
-                    {"_id": ObjectId(img_id), "user_id": user_id}
-                )
-            except:
-                # If img_id is not a valid ObjectId, try looking it up by filename
-                # Format might be: docid-idx-filename
-                pass
-            
-            # If not found by ID, try parsing the synthetic ID format (docid-idx-filename)
-            if not image_doc and "-" in img_id:
-                try:
-                    # Extract filename from synthetic ID
-                    # Format: docid-idx-filename or docid-idx-rest-of-filename
-                    parts = img_id.split("-", 2)
-                    if len(parts) >= 3:
-                        filename = parts[2]  # Everything after the second dash
-                        # Look up by filename and user
-                        image_doc = images_col.find_one(
-                            {"filename": filename, "user_id": user_id}
-                        )
-                        if image_doc:
-                            # Update the ID to the actual MongoDB ID
-                            img_id = str(image_doc["_id"])
-                except:
-                    pass
-
-            if not image_doc:
-                raise ValueError(f"Image not found or does not belong to user: {img_id}")
-
-            # Only extracted and uploaded images can be used as source
-            if image_doc.get("source_type") not in ["extracted", "uploaded"]:
-                raise ValueError(
-                    f"Cannot extract panels from {image_doc.get('source_type')} type image"
-                )
-
-            # Verify file exists
-            file_path = image_doc.get("file_path")
-            if not file_path:
-                raise ValueError(f"Image document has no file_path: {img_id}")
-
-            image_paths.append(file_path)
-            validated_ids.append(img_id)
-
-            logger.debug(f"Validated image {img_id}: {file_path}")
-        except Exception as e:
-            error_msg = f"Error validating image {img_id}: {str(e)}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+    for img_id in dict.fromkeys(image_ids):  # de-duplicate, keep order
+        image_doc = get_owned_resource(get_images_collection, img_id, user_id, "Image")
+        # Only extracted and uploaded images can be used as source
+        if image_doc.get("source_type") not in ["extracted", "uploaded"]:
+            raise ValidationError(
+                f"Cannot extract panels from {image_doc.get('source_type')} type image"
+            )
+        file_path = image_doc.get("file_path")
+        if not file_path:
+            raise ValidationError(f"Image has no stored file: {img_id}")
+        image_paths.append(file_path)
+        validated_ids.append(img_id)
 
     if not validated_ids:
-        raise ValueError("No valid images to process")
+        raise ValidationError("No valid images to process")
 
     # Create job log entry for the jobs dashboard (pending state)
     job_id = create_job_log(
@@ -112,22 +68,19 @@ def initiate_panel_extraction(
             image_paths=image_paths,
             job_id=job_id
         )
-
-        attach_celery_task(job_id, task.id)
-        result = {
-            "task_id": task.id,
-            "status": "queued",
-            "image_ids": validated_ids,
-            "message": f"Panel extraction queued for {len(validated_ids)} image(s)"
-        }
-
-        logger.info(f"Panel extraction task queued: {task.id} for user {user_id}")
-        return result
-
     except Exception as e:
-        error_msg = f"Error queuing panel extraction task: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        raise ValueError(error_msg)
+        logger.error(f"Error queuing panel extraction task: {e}", exc_info=True)
+        complete_job(job_id, user_id, JobStatus.FAILED, errors=["Task queue unavailable"])
+        raise ExternalServiceError("task queue", "panel extraction could not be started")
+
+    attach_celery_task(job_id, task.id)
+    logger.info(f"Panel extraction task queued: {task.id} for user {user_id}")
+    return {
+        "task_id": task.id,
+        "status": "queued",
+        "image_ids": validated_ids,
+        "message": f"Panel extraction queued for {len(validated_ids)} image(s)"
+    }
 
 
 def get_panel_extraction_status(

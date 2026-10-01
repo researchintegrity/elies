@@ -16,6 +16,7 @@ EXPECTED_TASKS = {
     "tasks.cbir_update_labels",
     "tasks.detect_copy_move",
     "tasks.detect_copy_move_cross",
+    "tasks.delete_user_account",
     "tasks.detect_trufor",
     "tasks.extract_images",
     "tasks.extract_panels",

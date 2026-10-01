@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.db.mongodb import get_users_collection
 from app.routes.auth import _token_response, email_query
+from app.services.deletion_service import request_account_deletion
 from app.schemas import (
     MessageResponse,
     PasswordChangeRequest,
@@ -88,14 +89,14 @@ def update_current_user(
 def delete_current_user(current_user: dict = Depends(get_current_active_user)) -> dict:
     """
     Delete current user account
-    
-    Permanently deletes the authenticated user's account and all associated data
+
+    Permanently deletes the account and all associated data: documents,
+    images, annotations, analyses, relationships, jobs, stored files and
+    similarity-search vectors. The account is disabled immediately; data is
+    removed in the background.
     """
-    collection = get_users_collection()
-    
-    collection.delete_one({"_id": current_user["_id"]})
-    
-    return {"message": "User account deleted successfully"}
+    request_account_deletion(str(current_user["_id"]))
+    return {"message": "Your account has been disabled and all of its data is being deleted"}
 
 
 @router.put("/me/password", response_model=TokenResponse)

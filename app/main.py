@@ -3,6 +3,7 @@ ELIES Scientific Image Analysis System
 """
 import logging
 
+from bson.errors import InvalidId
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -79,10 +80,9 @@ app.include_router(api.router)
 async def elies_exception_handler(request: Request, exc: ELIESException) -> JSONResponse:
     """
     Handle custom ELIES exceptions and convert to JSON responses.
-    
-    This allows services to raise domain exceptions (ValidationError,
-    ResourceNotFoundError, etc.) which are automatically converted
-    to appropriate HTTP responses.
+
+    Services raise domain exceptions (ValidationError, ResourceNotFoundError,
+    etc.) which are converted to the matching HTTP status here.
     """
     logger.warning(
         "ELIES exception: %s (status=%d, path=%s)",
@@ -94,6 +94,19 @@ async def elies_exception_handler(request: Request, exc: ELIESException) -> JSON
         status_code=exc.status_code,
         content={"detail": exc.message}
     )
+
+
+@app.exception_handler(InvalidId)
+async def invalid_id_handler(request: Request, exc: InvalidId) -> JSONResponse:
+    """A malformed ObjectId in a path, query or body is a client error."""
+    return JSONResponse(status_code=400, content={"detail": "Invalid ID format"})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    """Log unexpected errors in full, but never return internals to the client."""
+    logger.exception("Unhandled error on %s %s", request.method, request.url.path)
+    return JSONResponse(status_code=500, content={"detail": "Internal server error"})
 
 
 # ============================================================================

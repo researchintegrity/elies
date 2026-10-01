@@ -17,6 +17,7 @@ import math
 import logging
 
 from app.schemas import (
+    MessageResponse,
     AdminUserResponse,
     AdminUserListResponse,
     AdminUpdateQuotaRequest,
@@ -32,6 +33,7 @@ from app.utils.security import (
     revoke_user_tokens,
 )
 from app.db.mongodb import get_users_collection
+from app.services.deletion_service import request_account_deletion
 
 logger = logging.getLogger(__name__)
 
@@ -437,6 +439,38 @@ def update_user_status(
     logger.info(f"Admin {current_admin['username']} {action} user {target_user['username']}")
     
     return AdminUserResponse(**result).model_dump(by_alias=True)
+
+
+@router.delete("/users/{user_id}", response_model=MessageResponse)
+def delete_user(
+    user_id: str,
+    current_admin: dict = Depends(get_current_admin_user)
+) -> dict:
+    """
+    Delete a user account and all of its data.
+
+    Admins cannot delete themselves here (use DELETE /users/me), and another
+    administrator must be demoted first.
+
+    Requires admin privileges.
+    """
+    if str(current_admin["_id"]) == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Use DELETE /users/me to delete your own account"
+        )
+    target_user = get_users_collection().find_one({"_id": ObjectId(user_id)})
+    if not target_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if "admin" in target_user.get("roles", []):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Remove the admin role before deleting an administrator"
+        )
+
+    request_account_deletion(user_id)
+    logger.info(f"Admin {current_admin['username']} deleted user {target_user['username']}")
+    return {"message": f"User {target_user['username']} is being deleted"}
 
 
 # ============================================================================

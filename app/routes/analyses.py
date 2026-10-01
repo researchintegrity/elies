@@ -13,6 +13,7 @@ from app.schemas import (
     PaginatedResponse,
     JobType,
 )
+from app.services.deletion_service import delete_analyses
 from app.services.resource_helpers import get_owned_resource
 from app.services.job_logger import attach_celery_task, create_job_log
 from app.config.settings import convert_container_path_to_host, is_container_path
@@ -39,43 +40,37 @@ def get_analysis_stats(
     Returns total counts by status for all analyses.
     This is used to power the stats badges in the Analysis Dashboard.
     """
-    try:
-        user_id_str = str(current_user["_id"])
-        analyses_col = get_analyses_collection()
-        
-        # Count by status using aggregation
-        pipeline = [
-            {"$match": {"user_id": user_id_str}},
-            {"$group": {"_id": "$status", "count": {"$sum": 1}}}
-        ]
-        
-        status_counts = list(analyses_col.aggregate(pipeline))
-        
-        # Build response with all statuses
-        stats = {
-            "total": 0,
-            "completed": 0,
-            "processing": 0,
-            "pending": 0,
-            "failed": 0
-        }
-        
-        for item in status_counts:
-            status_key = item["_id"]
-            if status_key in stats:
-                stats[status_key] = item["count"]
-            stats["total"] += item["count"]
-        
-        return {
-            "success": True,
-            "message": "Stats retrieved successfully",
-            "data": stats
-        }
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve analysis stats: {str(e)}"
-        )
+    user_id_str = str(current_user["_id"])
+    analyses_col = get_analyses_collection()
+    
+    # Count by status using aggregation
+    pipeline = [
+        {"$match": {"user_id": user_id_str}},
+        {"$group": {"_id": "$status", "count": {"$sum": 1}}}
+    ]
+    
+    status_counts = list(analyses_col.aggregate(pipeline))
+    
+    # Build response with all statuses
+    stats = {
+        "total": 0,
+        "completed": 0,
+        "processing": 0,
+        "pending": 0,
+        "failed": 0
+    }
+    
+    for item in status_counts:
+        status_key = item["_id"]
+        if status_key in stats:
+            stats[status_key] = item["count"]
+        stats["total"] += item["count"]
+    
+    return {
+        "success": True,
+        "message": "Stats retrieved successfully",
+        "data": stats
+    }
 
 
 @router.get("", response_model=PaginatedResponse)
@@ -84,7 +79,7 @@ def list_analyses(
     page: int = Query(1, ge=1, description="Page number starting from 1"),
     per_page: int = Query(10, ge=1, le=100, description="Items per page"),
     type: Optional[AnalysisType] = Query(None, description="Filter by analysis type"),
-    status: Optional[AnalysisStatus] = Query(None, description="Filter by analysis status"),
+    status_filter: Optional[AnalysisStatus] = Query(None, alias="status", description="Filter by analysis status"),
     source_image_id: Optional[str] = Query(None, description="Filter by source image ID"),
     date_from: Optional[datetime] = Query(None, description="Filter analyses created after this date"),
     date_to: Optional[datetime] = Query(None, description="Filter analyses created before this date"),
@@ -111,112 +106,106 @@ def list_analyses(
     Returns:
         Paginated list of analyses with parameters field for reproducibility
     """
-    try:
-        user_id_str = str(current_user["_id"])
-        analyses_col = get_analyses_collection()
-        
-        # Build filter query - always filter by user_id for security
-        filter_query = {"user_id": user_id_str}
-        
-        # Exclude non-forensic analysis types from the Analysis Dashboard
-        # These belong in the Jobs dashboard or other views
-        EXCLUDED_TYPES = ["cbir_search", "document_extraction", "image_extraction"]
-        
-        # Valid forensic screening tool subtypes (exclude records that don't match these)
-        VALID_SCREENING_SUBTYPES = ["ela", "noise", "gradient", "levelSweep", "cloneDetection", "metadata"]
-        
-        if type:
-            # If user explicitly filters by type, validate that it's allowed in this view  
-            if type.value in EXCLUDED_TYPES:  
-                raise HTTPException(  
-                    status_code=status.HTTP_400_BAD_REQUEST,  
-                    detail=f"Analysis type '{type.value}' is not available in this view."  
-                )  
-            filter_query["type"] = type.value  
-            # If filtering by screening_tool, also require valid subtype  
-            if type.value == "screening_tool":  
-                filter_query["parameters.analysis_subtype"] = {"$in": VALID_SCREENING_SUBTYPES}  
-        else:
-            # By default, exclude non-forensic types AND mislabeled screening_tool records
-            # Use $or to include:
-            # 1. All forensic types except screening_tool
-            # 2. screening_tool with valid subtypes only
-            def get_dashboard_type_filter(EXCLUDED_TYPES, VALID_SCREENING_SUBTYPES):
-                """
-                Returns query to match only dashboard-appropriate forensic analyses:
-                1. Include standard forensic types (excluding non-forensic & generic screening tools)
-                2. Include screening tools only if they match valid forensic subtypes
-                """
-                return {
-                    "$or": [
-                        {"type": {"$nin": EXCLUDED_TYPES + ["screening_tool"]}},
-                        {
-                            "type": "screening_tool",
-                            "parameters.analysis_subtype": {"$in": VALID_SCREENING_SUBTYPES}
-                        }
-                    ]
-                }
-
-            filter_query.update(get_dashboard_type_filter(EXCLUDED_TYPES, VALID_SCREENING_SUBTYPES))
-        
-        if status:
-            filter_query["status"] = status.value
-            
-        if source_image_id:
-            filter_query["source_image_id"] = source_image_id
-            
-        # Date range filters
-        if date_from or date_to:
-            date_filter = {}
-            if date_from:
-                date_filter["$gte"] = date_from
-            if date_to:
-                date_filter["$lte"] = date_to
-            filter_query["created_at"] = date_filter
-        
-        # Get total count for pagination
-        total_items = analyses_col.count_documents(filter_query)
-        total_pages = (total_items + per_page - 1) // per_page if total_items > 0 else 1
-        
-        # Validate pagination
-        if page > total_pages and total_pages > 0:
-            page = total_pages
-        
-        # Calculate skip
-        skip = (page - 1) * per_page
-        
-        # Build sort order
-        sort_order = -1 if order.lower() == "desc" else 1
-        valid_sort_fields = {"created_at", "updated_at", "type", "status"}
-        if sort_by not in valid_sort_fields:
-            sort_by = "created_at"
-        
-        # Query analyses
-        analyses = list(analyses_col.find(filter_query)
-                       .sort(sort_by, sort_order)
-                       .skip(skip)
-                       .limit(per_page))
-        
-        # Convert ObjectId to string for JSON serialization
-        for analysis in analyses:
-            analysis["_id"] = str(analysis["_id"])
-        
-        return PaginatedResponse(
-            success=True,
-            message="Analyses retrieved successfully",
-            data=analyses,
-            pagination={
-                "current_page": page,
-                "total_pages": total_pages,
-                "page_size": per_page,
-                "total_items": total_items
+    user_id_str = str(current_user["_id"])
+    analyses_col = get_analyses_collection()
+    
+    # Build filter query - always filter by user_id for security
+    filter_query = {"user_id": user_id_str}
+    
+    # Exclude non-forensic analysis types from the Analysis Dashboard
+    # These belong in the Jobs dashboard or other views
+    EXCLUDED_TYPES = ["cbir_search", "document_extraction", "image_extraction"]
+    
+    # Valid forensic screening tool subtypes (exclude records that don't match these)
+    VALID_SCREENING_SUBTYPES = ["ela", "noise", "gradient", "levelSweep", "cloneDetection", "metadata"]
+    
+    if type:
+        # If user explicitly filters by type, validate that it's allowed in this view  
+        if type.value in EXCLUDED_TYPES:  
+            raise HTTPException(  
+                status_code=status.HTTP_400_BAD_REQUEST,  
+                detail=f"Analysis type '{type.value}' is not available in this view."  
+            )  
+        filter_query["type"] = type.value  
+        # If filtering by screening_tool, also require valid subtype  
+        if type.value == "screening_tool":  
+            filter_query["parameters.analysis_subtype"] = {"$in": VALID_SCREENING_SUBTYPES}  
+    else:
+        # By default, exclude non-forensic types AND mislabeled screening_tool records
+        # Use $or to include:
+        # 1. All forensic types except screening_tool
+        # 2. screening_tool with valid subtypes only
+        def get_dashboard_type_filter(EXCLUDED_TYPES, VALID_SCREENING_SUBTYPES):
+            """
+            Returns query to match only dashboard-appropriate forensic analyses:
+            1. Include standard forensic types (excluding non-forensic & generic screening tools)
+            2. Include screening tools only if they match valid forensic subtypes
+            """
+            return {
+                "$or": [
+                    {"type": {"$nin": EXCLUDED_TYPES + ["screening_tool"]}},
+                    {
+                        "type": "screening_tool",
+                        "parameters.analysis_subtype": {"$in": VALID_SCREENING_SUBTYPES}
+                    }
+                ]
             }
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Failed to retrieve analyses: {str(e)}"
-        )
+
+        filter_query.update(get_dashboard_type_filter(EXCLUDED_TYPES, VALID_SCREENING_SUBTYPES))
+    
+    if status_filter:
+        filter_query["status"] = status_filter.value
+        
+    if source_image_id:
+        filter_query["source_image_id"] = source_image_id
+        
+    # Date range filters
+    if date_from or date_to:
+        date_filter = {}
+        if date_from:
+            date_filter["$gte"] = date_from
+        if date_to:
+            date_filter["$lte"] = date_to
+        filter_query["created_at"] = date_filter
+    
+    # Get total count for pagination
+    total_items = analyses_col.count_documents(filter_query)
+    total_pages = (total_items + per_page - 1) // per_page if total_items > 0 else 1
+    
+    # Validate pagination
+    if page > total_pages and total_pages > 0:
+        page = total_pages
+    
+    # Calculate skip
+    skip = (page - 1) * per_page
+    
+    # Build sort order
+    sort_order = -1 if order.lower() == "desc" else 1
+    valid_sort_fields = {"created_at", "updated_at", "type", "status"}
+    if sort_by not in valid_sort_fields:
+        sort_by = "created_at"
+    
+    # Query analyses
+    analyses = list(analyses_col.find(filter_query)
+                   .sort(sort_by, sort_order)
+                   .skip(skip)
+                   .limit(per_page))
+    
+    # Convert ObjectId to string for JSON serialization
+    for analysis in analyses:
+        analysis["_id"] = str(analysis["_id"])
+    
+    return PaginatedResponse(
+        success=True,
+        message="Analyses retrieved successfully",
+        data=analyses,
+        pagination={
+            "current_page": page,
+            "total_pages": total_pages,
+            "page_size": per_page,
+            "total_items": total_items
+        }
+    )
 
 
 @router.get("/by-image/{image_id}", response_model=list)
@@ -239,36 +228,35 @@ def list_analyses_by_image(
     Returns:
         List of analyses sorted by creation date (newest first)
     """
-    try:
-        user_id_str = str(current_user["_id"])
-        analyses_col = get_analyses_collection()
-        
-        # Find analyses where this image is source or target
-        filter_query = {
-            "user_id": user_id_str,
-            "$or": [
-                {"source_image_id": image_id},
-                {"target_image_id": image_id}
-            ]
-        }
-        
-        # Query analyses, sorted by newest first
-        analyses = list(
-            analyses_col.find(filter_query)
-            .sort("created_at", -1)
-            .limit(limit)
-        )
-        
-        # Convert ObjectId to string for JSON serialization
-        for analysis in analyses:
-            analysis["_id"] = str(analysis["_id"])
-        
-        return analyses
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve analyses for image: {str(e)}"
-        )
+    user_id_str = str(current_user["_id"])
+    analyses_col = get_analyses_collection()
+    
+    # Find analyses where this image is source or target
+    filter_query = {
+        "user_id": user_id_str,
+        "$or": [
+            {"source_image_id": image_id},
+            {"target_image_id": image_id}
+        ]
+    }
+    
+    # Query analyses, sorted by newest first
+    analyses = list(
+        analyses_col.find(filter_query)
+        .sort("created_at", -1)
+        .limit(limit)
+    )
+    
+    # Convert ObjectId to string for JSON serialization
+    for analysis in analyses:
+        analysis["_id"] = str(analysis["_id"])
+    
+    return analyses
+
+
+def _get_owned_analysis(analysis_id: str, user_id: str) -> dict:
+    """The analysis if it belongs to the user (404 otherwise, 400 for a bad id)."""
+    return get_owned_resource(get_analyses_collection, analysis_id, user_id, "Analysis")
 
 
 @router.get("/{analysis_id}", response_model=AnalysisResponse)
@@ -279,24 +267,7 @@ def get_analysis(
     """
     Get analysis details by ID.
     """
-    user_id_str = str(current_user["_id"])
-    analyses_col = get_analyses_collection()
-    
-    analysis = analyses_col.find_one({"_id": ObjectId(analysis_id)})
-    
-    if not analysis:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Analysis not found"
-        )
-        
-    if analysis["user_id"] != user_id_str:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to access this analysis"
-        )
-        
-    return analysis
+    return _get_owned_analysis(analysis_id, str(current_user["_id"]))
 
 
 @router.delete("/{analysis_id}", status_code=status.HTTP_200_OK)
@@ -318,78 +289,9 @@ def delete_analysis(
     Returns:
         Success message
     """
-    user_id_str = str(current_user["_id"])
-    analyses_col = get_analyses_collection()
-    
-    # Find the analysis first to verify it exists and user owns it
-    try:
-        analysis = analyses_col.find_one({"_id": ObjectId(analysis_id)})
-    except Exception:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid analysis ID format"
-        )
-    
-    if not analysis:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Analysis not found"
-        )
-        
-    if analysis["user_id"] != user_id_str:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to delete this analysis"
-        )
-    
-    # Get image IDs to update (remove analysis reference)
-    image_ids = []
-    if analysis.get("source_image_id"):
-        image_ids.append(analysis["source_image_id"])
-    if analysis.get("target_image_id"):
-        image_ids.append(analysis["target_image_id"])
-    
-    # Remove analysis reference from associated images
-    if image_ids:
-        images_col = get_images_collection()
-        for img_id in image_ids:
-            try:
-                images_col.update_one(
-                    {"_id": ObjectId(img_id)},
-                    {"$pull": {"analysis_ids": analysis_id}}
-                )
-            except Exception:
-                pass  # Image may have been deleted, continue
-    
-    # Clean up result files and the analysis folder
-    results = analysis.get("results", {})
-    analysis_dirs_to_remove = set()
-    
-    # First, identify and remove individual result files
-    for key, value in results.items():
-        if isinstance(value, str) and os.path.isfile(value):
-            try:
-                # Track the parent directory (analysis folder)
-                parent_dir = os.path.dirname(value)
-                analysis_dirs_to_remove.add(parent_dir)
-                os.remove(value)
-            except Exception:
-                pass  # File may not exist or be inaccessible
-    
-    # Now remove the analysis folder(s) if they're empty or contain only this analysis's files
-    import shutil
-    for analysis_dir in analysis_dirs_to_remove:
-        if os.path.isdir(analysis_dir):
-            try:
-                # Check if the directory name matches the analysis_id (safety check)
-                if analysis_id in analysis_dir:
-                    shutil.rmtree(analysis_dir)
-            except Exception:
-                pass  # Directory may not exist or be inaccessible
-    
-    # Delete the analysis document
-    analyses_col.delete_one({"_id": ObjectId(analysis_id)})
-    
+    analysis = _get_owned_analysis(analysis_id, str(current_user["_id"]))
+    delete_analyses([analysis])
+
     return {
         "success": True,
         "message": f"Analysis {analysis_id} deleted successfully"
@@ -426,21 +328,8 @@ def download_analysis_result(
             detail=f"Invalid result type. Must be one of: {', '.join(valid_types)}"
         )
     
-    analyses_col = get_analyses_collection()
-    analysis = analyses_col.find_one({"_id": ObjectId(analysis_id)})
-    
-    if not analysis:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Analysis not found"
-        )
-        
-    if analysis["user_id"] != user_id_str:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not authorized to access this analysis"
-        )
-    
+    analysis = _get_owned_analysis(analysis_id, user_id_str)
+
     # Get the result file path
     results = analysis.get("results", {})
     
@@ -483,7 +372,7 @@ def download_analysis_result(
     if not os.path.exists(file_path):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Result file not found on disk: {file_path}"
+            detail=f"The {result_type} result file is missing"
         )
     
     # Return the file
