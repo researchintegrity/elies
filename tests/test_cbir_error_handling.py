@@ -1,12 +1,16 @@
 """
-Unit tests for CBIR error handling and cleanup.
+Integration tests for the pre-flight CBIR check on uploads (live MongoDB).
 
-Tests the pre-flight CBIR check and all-or-nothing cleanup behavior.
+Images are never deleted when indexing fails (#69); that behaviour and the
+pre-flight check are covered without services in tests/unit/test_cbir_indexing.py.
 """
 import pytest
 from unittest.mock import patch, MagicMock
 from PIL import Image
 import io
+
+# Needs a running MongoDB (and for some tests Redis/CBIR): run with -m integration
+pytestmark = pytest.mark.integration
 
 
 class TestPreflightCBIRCheck:
@@ -111,104 +115,6 @@ class TestPreflightCBIRCheck:
             
             # Should proceed (either 201 success or other error, but not 503)
             assert response.status_code != 503
-
-
-class TestBatchCleanupOnFailure:
-    """Tests for all-or-nothing batch cleanup behavior."""
-    
-    def test_cbir_index_batch_cleans_up_on_failure(self):
-        """Test that cbir_index_batch deletes all images when CBIR fails."""
-        from app.tasks.cbir import cbir_index_batch
-        
-        mock_image_items = [
-            {"image_id": "id1", "image_path": "/path/1.png", "labels": []},
-            {"image_id": "id2", "image_path": "/path/2.png", "labels": []},
-        ]
-        
-        with patch('app.tasks.cbir.index_images_batch') as mock_index:
-            mock_index.return_value = (False, "Connection refused", {})
-            
-            with patch('app.tasks.cbir._cleanup_batch_images') as mock_cleanup:
-                mock_cleanup.return_value = ["id1", "id2"]
-                
-                result = cbir_index_batch(
-                    user_id="test_user",
-                    image_items=mock_image_items
-                )
-                
-                # Verify cleanup was called with all image items
-                mock_cleanup.assert_called_once()
-                call_args = mock_cleanup.call_args
-                assert len(call_args[0][0]) == 2  # Two items passed
-                
-                # Verify result indicates failure and cleanup
-                assert result["status"] == "failed"
-                assert "deleted_image_ids" in result
-                assert len(result["deleted_image_ids"]) == 2
-    
-    def test_cbir_index_batch_with_progress_cleans_up_on_chunk_failure(self):
-        """Test that cbir_index_batch_with_progress deletes all images when a chunk fails."""
-        from app.tasks.cbir import cbir_index_batch_with_progress
-        
-        mock_image_items = [
-            {"image_id": "id1", "image_path": "/path/1.png", "labels": []},
-            {"image_id": "id2", "image_path": "/path/2.png", "labels": []},
-        ]
-        
-        with patch('app.tasks.cbir.get_indexing_jobs_collection') as mock_jobs_col:
-            mock_jobs = MagicMock()
-            mock_jobs.find_one.return_value = {"status": "pending"}
-            mock_jobs.update_one = MagicMock()
-            mock_jobs_col.return_value = mock_jobs
-            
-            with patch('app.tasks.cbir.get_images_collection') as mock_images_col:
-                mock_images_col.return_value = MagicMock()
-                
-                with patch('app.tasks.cbir.index_images_batch') as mock_index:
-                    mock_index.return_value = (False, "CBIR service error", {})
-                    
-                    with patch('app.tasks.cbir._cleanup_batch_images') as mock_cleanup:
-                        mock_cleanup.return_value = ["id1", "id2"]
-                        
-                        result = cbir_index_batch_with_progress(
-                            job_id="test_job_123",
-                            user_id="test_user",
-                            image_items=mock_image_items
-                        )
-                        
-                        # Verify cleanup was called
-                        mock_cleanup.assert_called_once()
-                        
-                        # Verify result indicates failure
-                        assert result["status"] == "failed"
-                        assert "deleted_image_ids" in result
-                        assert len(result["deleted_image_ids"]) == 2
-
-
-class TestCleanupHelper:
-    """Tests for the _cleanup_batch_images helper function."""
-    
-    def test_cleanup_batch_images_calls_delete_for_each_image(self):
-        """Test that cleanup calls delete_image_and_artifacts for each image."""
-        from app.tasks.cbir import _cleanup_batch_images
-        
-        mock_items = [
-            {"image_id": "id1"},
-            {"image_id": "id2"},
-            {"image_id": "id3"},
-        ]
-        
-        with patch('app.services.image_service.delete_image_and_artifacts') as mock_delete:
-            mock_delete.return_value = None
-            
-            deleted_ids = _cleanup_batch_images(mock_items, "test_user")
-            
-            # Verify delete was called for each image
-            assert mock_delete.call_count == 3
-            assert len(deleted_ids) == 3
-            assert "id1" in deleted_ids
-            assert "id2" in deleted_ids
-            assert "id3" in deleted_ids
 
 
 # Fixtures

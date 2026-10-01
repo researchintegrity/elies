@@ -213,7 +213,7 @@ def test_active_job_limit(client, alice):
 
 
 def test_reaper_fails_only_stale_work(mock_db):
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     old, fresh = now - timedelta(hours=2), now - timedelta(minutes=5)
     stale_job = job_logger.create_job_log("u1", JobType.TRUFOR, "stale")
     get_jobs_collection().update_one({"_id": stale_job}, {"$set": {"status": "processing", "updated_at": old}})

@@ -100,3 +100,19 @@ def test_extracted_images_batch_failure_does_not_delete(mock_db, monkeypatch):
 
     assert result["status"] == "failed"
     assert get_images_collection().count_documents({"cbir_indexed": False, "cbir_error": "boom"}) == 2
+
+
+@pytest.mark.parametrize("path, files", [
+    ("/images/upload", {"file": ("a.png", b"x", "image/png")}),
+    ("/images/upload/batch", {"files": ("a.png", b"x", "image/png")}),
+    ("/documents/upload", {"file": ("a.pdf", b"%PDF-1.4", "application/pdf")}),
+])
+def test_uploads_are_refused_while_cbir_is_down(client, alice, monkeypatch, path, files):
+    import app.routes.documents as documents_routes
+    import app.routes.images as images_routes
+
+    monkeypatch.setattr(images_routes, "check_cbir_health", lambda: (False, "down"))
+    monkeypatch.setattr(documents_routes, "check_cbir_health", lambda: (False, "down"))
+    response = client.post(path, headers=alice.headers, files=files)
+    assert response.status_code == 503
+    assert get_images_collection().count_documents({}) == 0

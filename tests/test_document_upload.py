@@ -26,6 +26,9 @@ import shutil
 from app.config.settings import UPLOAD_DIR
 from app.config.storage_quota import MAX_IMAGE_FILE_SIZE, MAX_PDF_FILE_SIZE
 
+# Needs a running MongoDB (and for some tests Redis/CBIR): run with -m integration
+pytestmark = pytest.mark.integration
+
 # Configuration
 BASE_URL = os.getenv("API_URL", "http://localhost:8000")
 

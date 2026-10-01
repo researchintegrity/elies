@@ -7,6 +7,9 @@ import os
 
 from app.db.mongodb import get_users_collection, db_connection
 
+# Needs a running MongoDB (and for some tests Redis/CBIR): run with -m integration
+pytestmark = pytest.mark.integration
+
 # Configuration
 BASE_URL = os.getenv("API_URL", "http://localhost:8000")
 

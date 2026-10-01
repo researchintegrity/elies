@@ -6,6 +6,9 @@ from unittest.mock import patch, MagicMock
 from app.services.provenance_service import run_provenance_analysis
 from app.tasks.provenance import provenance_analysis_task
 
+# Needs a running MongoDB (and for some tests Redis/CBIR): run with -m integration
+pytestmark = pytest.mark.integration
+
 @pytest.fixture
 def mock_db_collection():
     with patch("app.services.provenance_service.get_images_collection") as mock_get_images:

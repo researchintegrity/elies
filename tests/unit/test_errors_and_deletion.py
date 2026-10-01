@@ -1,5 +1,5 @@
 """Error mapping (#62), field names (#63), deletion cascade (#65) and account deletion (#58)."""
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -121,7 +121,7 @@ def _derived_artifacts(user_id, image_id):
     get_dual_annotations_collection().insert_one({"user_id": user_id, "source_image_id": other, "target_image_id": image_id})
     get_relationships_collection().insert_one({"user_id": user_id, "image1_id": image_id, "image2_id": other})
     analysis_id = get_analyses_collection().insert_one(
-        {"user_id": user_id, "type": "trufor", "source_image_id": image_id, "created_at": datetime.utcnow()}
+        {"user_id": user_id, "type": "trufor", "source_image_id": image_id, "created_at": datetime.now(timezone.utc)}
     ).inserted_id
     out = analysis_output_dir(user_id, str(analysis_id), "trufor")
     out.mkdir(parents=True)
