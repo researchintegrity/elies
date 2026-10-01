@@ -27,9 +27,9 @@ from app.utils.security import (
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 # Failed logins per (client IP, account) and per client IP; registrations per IP
-login_failures_by_account = SlidingWindowLimiter(LOGIN_MAX_FAILURES, LOGIN_FAILURE_WINDOW_SECONDS)
-login_failures_by_ip = SlidingWindowLimiter(LOGIN_MAX_FAILURES * 5, LOGIN_FAILURE_WINDOW_SECONDS)
-registrations_by_ip = SlidingWindowLimiter(REGISTRATION_MAX_PER_HOUR, 3600)
+login_failures_by_account = SlidingWindowLimiter("login-account", LOGIN_MAX_FAILURES, LOGIN_FAILURE_WINDOW_SECONDS)
+login_failures_by_ip = SlidingWindowLimiter("login-ip", LOGIN_MAX_FAILURES * 5, LOGIN_FAILURE_WINDOW_SECONDS)
+registrations_by_ip = SlidingWindowLimiter("register-ip", REGISTRATION_MAX_PER_HOUR, 3600)
 
 
 def _client_ip(request: Request) -> str:

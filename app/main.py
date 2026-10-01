@@ -160,10 +160,10 @@ def _database_ready() -> bool:
 
 
 def _redis_ready() -> bool:
-    from app.services.job_logger import _get_redis
+    from app.utils.redis_client import get_redis
 
     try:
-        client = _get_redis()
+        client = get_redis()
         return bool(client and client.ping())
     except Exception as e:
         logger.warning("Readiness: Redis unavailable: %s", e)

@@ -79,18 +79,27 @@ def stub_external_services(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def fake_redis(monkeypatch):
-    """In-memory Redis shared by the sync publisher and async SSE subscribers."""
+    """In-memory Redis shared by job events, rate limits and the async SSE subscribers."""
     import fakeredis
     import fakeredis.aioredis
 
     from app.routes import jobs as jobs_routes
-    from app.services import job_logger
+    from app.utils import redis_client
 
     server = fakeredis.FakeServer()
-    monkeypatch.setattr(job_logger, "_redis_client", fakeredis.FakeRedis(server=server))
-    monkeypatch.setattr(job_logger, "_redis_unavailable_until", 0.0)
+    monkeypatch.setattr(redis_client, "_client", fakeredis.FakeRedis(server=server))
+    monkeypatch.setattr(redis_client, "_unavailable_until", 0.0)
     monkeypatch.setattr(jobs_routes, "_async_redis_client", lambda: fakeredis.aioredis.FakeRedis(server=server))
     return server
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limits(fake_redis):
+    """Overrides tests/conftest.py's fixture: clear the limiters once the fake Redis is in place."""
+    from app.routes import auth
+
+    for limiter in (auth.login_failures_by_account, auth.login_failures_by_ip, auth.registrations_by_ip):
+        limiter.clear()
 
 
 @pytest.fixture

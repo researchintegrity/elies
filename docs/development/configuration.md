@@ -43,7 +43,7 @@ containers. Only `JWT_SECRET`, `HOST_WORKSPACE_PATH` and
 | `LOGIN_FAILURE_WINDOW_SECONDS` | `900` | Window for the login limit. |
 | `REGISTRATION_MAX_PER_HOUR` | `20` | Registrations allowed per IP per hour. |
 
-The login and registration limits are kept in memory by each API process.
+The login and registration limits are shared by all API processes through Redis; while Redis is unreachable each process counts on its own.
 
 ## Storage and uploads
 

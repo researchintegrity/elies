@@ -13,17 +13,17 @@ SSE subscribers in the current process only.
 import asyncio
 import json
 import logging
-import time
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import redis
 
-from app.config.settings import JOB_EVENTS_REDIS_URL, JOB_RETENTION_DAYS, MAX_ACTIVE_JOBS_PER_USER
+from app.config.settings import JOB_RETENTION_DAYS, MAX_ACTIVE_JOBS_PER_USER
 from app.db.mongodb import get_jobs_collection
 from app.exceptions import TooManyJobsError
 from app.request_context import current_request_id
+from app.utils.redis_client import get_redis, mark_unavailable
 from app.schemas import JobStatus, JobType
 
 logger = logging.getLogger(__name__)
@@ -33,10 +33,6 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 JOB_EVENTS_CHANNEL_PREFIX = "elies:jobs:"
-_REDIS_RETRY_AFTER = 30  # seconds to wait before trying Redis again after a failure
-
-_redis_client: Optional[redis.Redis] = None
-_redis_unavailable_until = 0.0
 
 # Fallback in-process subscribers: user_id -> [(event loop, queue)]
 _subscribers: Dict[str, List[Tuple[asyncio.AbstractEventLoop, "asyncio.Queue[Dict[str, Any]]"]]] = {}
@@ -46,26 +42,15 @@ def job_events_channel(user_id: str) -> str:
     return f"{JOB_EVENTS_CHANNEL_PREFIX}{user_id}"
 
 
-def _get_redis() -> Optional[redis.Redis]:
-    global _redis_client
-    if time.monotonic() < _redis_unavailable_until:
-        return None
-    if _redis_client is None:
-        _redis_client = redis.Redis.from_url(JOB_EVENTS_REDIS_URL, socket_connect_timeout=1, socket_timeout=2)
-    return _redis_client
-
-
 def _publish_to_redis(user_id: str, notification: dict) -> bool:
-    global _redis_unavailable_until
-    client = _get_redis()
+    client = get_redis()
     if client is None:
         return False
     try:
         client.publish(job_events_channel(user_id), json.dumps(notification, default=str))
         return True
     except redis.RedisError as e:
-        logger.warning("Job events: Redis unavailable (%s); delivering in-process only", e)
-        _redis_unavailable_until = time.monotonic() + _REDIS_RETRY_AFTER
+        mark_unavailable(e, "job events")
         return False
 
 

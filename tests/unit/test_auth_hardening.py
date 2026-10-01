@@ -113,3 +113,45 @@ def test_cli_creates_and_promotes_admins(mock_db, alice, capsys):
     assert cli.main(["promote", "--username", "alice"]) == 0
     assert "admin" in get_users_collection().find_one({"username": "alice"})["roles"]
     assert cli.main(["promote", "--username", "nobody"]) == 1
+
+
+def test_rate_limits_are_shared_between_api_processes():
+    from app.utils.rate_limit import SlidingWindowLimiter
+
+    # Two limiters with the same name stand for the same limit in two API processes
+    process_a = SlidingWindowLimiter("shared-test", 2, 60)
+    process_b = SlidingWindowLimiter("shared-test", 2, 60)
+    process_a.hit("1.2.3.4")
+    process_b.hit("1.2.3.4")
+    assert process_a.retry_after("1.2.3.4") and process_b.retry_after("1.2.3.4")
+    assert process_a.retry_after("5.6.7.8") is None
+    process_b.reset("1.2.3.4")
+    assert process_a.retry_after("1.2.3.4") is None
+
+
+def test_rate_limits_fall_back_to_process_memory_without_redis(monkeypatch):
+    from app.utils import redis_client
+    from app.utils.rate_limit import SlidingWindowLimiter
+
+    monkeypatch.setattr(redis_client, "_unavailable_until", float("inf"))
+    limiter = SlidingWindowLimiter("fallback-test", 1, 60)
+    assert limiter.retry_after("k") is None
+    limiter.hit("k")
+    assert limiter.retry_after("k") >= 1
+
+
+def test_redis_errors_switch_to_the_fallback(monkeypatch):
+    import redis as redis_lib
+
+    from app.utils import redis_client
+    from app.utils.rate_limit import SlidingWindowLimiter
+
+    class Broken:
+        def pipeline(self):
+            raise redis_lib.ConnectionError("down")
+
+    monkeypatch.setattr(redis_client, "_client", Broken())
+    limiter = SlidingWindowLimiter("broken-test", 1, 60)
+    limiter.hit("k")  # recorded in memory after the Redis error
+    assert redis_client.get_redis() is None
+    assert limiter.retry_after("k") >= 1

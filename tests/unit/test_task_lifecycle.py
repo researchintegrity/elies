@@ -23,6 +23,7 @@ from app.exceptions import DockerUnavailableError
 from app.routes import jobs as jobs_routes
 from app.schemas import JobType
 from app.services import job_logger
+from app.utils import redis_client
 from app.tasks.maintenance import reap_stale_jobs
 from tests.unit.conftest import PDF_BYTES, PNG_BYTES
 
@@ -287,7 +288,7 @@ def test_stream_falls_back_to_in_process_events_without_redis(mock_db, monkeypat
             pass
 
     monkeypatch.setattr(jobs_routes, "_async_redis_client", lambda: DownClient())
-    monkeypatch.setattr(job_logger, "_redis_unavailable_until", float("inf"))
+    monkeypatch.setattr(redis_client, "_unavailable_until", float("inf"))
     job_id = job_logger.create_job_log("u1", JobType.TRUFOR, "t")
 
     async def scenario():
