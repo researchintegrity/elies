@@ -4,10 +4,12 @@ Provenance Analysis Routes
 Provides endpoints for triggering provenance analysis.
 """
 from fastapi import APIRouter, Depends, HTTPException, status
-from datetime import datetime
+from datetime import datetime, timezone
 from bson import ObjectId
 
-from typing import Optional, List
+from typing import List, Literal, Optional
+
+from app.config.settings import MAX_IDS_PER_REQUEST
 
 from app.utils.security import get_current_user
 from app.db.mongodb import get_images_collection, get_analyses_collection
@@ -15,7 +17,8 @@ from app.schemas import (
     AnalysisStatus,
     JobType,
 )
-from app.services.job_logger import create_job_log
+from app.services.job_logger import create_job_log, ensure_job_capacity
+from app.services.task_submission import submit_task
 from app.utils.docker_provenance import check_provenance_health
 from app.tasks.provenance import provenance_analysis_task
 from pydantic import BaseModel, Field
@@ -29,11 +32,11 @@ router = APIRouter(
 class ProvenanceRequest(BaseModel):
     """Request to start provenance analysis"""
     image_id: str = Field(..., description="Query image ID")
-    search_image_ids: Optional[List[str]] = Field(None, description="Optional list of image IDs to include in analysis. If empty/None, all user images are used.")
+    search_image_ids: Optional[List[str]] = Field(None, max_length=MAX_IDS_PER_REQUEST, description="Optional list of image IDs to include in analysis. If empty/None, all user images are used.")
     k: int = Field(10, ge=1, le=100, description="Top-K candidates from CBIR")
     q: int = Field(5, ge=1, le=50, description="Top-Q candidates for expansion")
     max_depth: int = Field(3, ge=1, le=5, description="Maximum expansion depth")
-    descriptor_type: str = Field("cv_rsift", description="Descriptor type (cv_sift, cv_rsift, vlfeat_sift_heq)")
+    descriptor_type: Literal["cv_sift", "cv_rsift", "vlfeat_sift_heq"] = Field("cv_rsift", description="Descriptor type")
 
 
 class ProvenanceStatusResponse(BaseModel):
@@ -53,7 +56,7 @@ def provenance_health():
 
 
 @router.post("/analyze", status_code=status.HTTP_202_ACCEPTED)
-async def analyze_provenance(
+def analyze_provenance(
     request: ProvenanceRequest,
     current_user: dict = Depends(get_current_user)
 ):
@@ -66,7 +69,8 @@ async def analyze_provenance(
     3. Builds a graph of shared content
     """
     user_id = str(current_user["_id"])
-    
+    ensure_job_capacity(user_id)
+
     # Verify query image
     images_col = get_images_collection()
     query_image = images_col.find_one({
@@ -87,8 +91,8 @@ async def analyze_provenance(
         "user_id": user_id,
         "source_image_id": request.image_id,
         "status": AnalysisStatus.PENDING,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
         "parameters": {
             "k": request.k,
             "q": request.q,
@@ -120,7 +124,7 @@ async def analyze_provenance(
     )
     
     # Trigger async task
-    provenance_analysis_task.delay(
+    submit_task(provenance_analysis_task, dict(
         analysis_id=analysis_id,
         user_id=user_id,
         query_image_id=request.image_id,
@@ -130,8 +134,9 @@ async def analyze_provenance(
         max_depth=request.max_depth,
         descriptor_type=request.descriptor_type,
         job_id=job_id
-    )
+    ), owner_id=user_id, job_id=job_id, analysis_id=analysis_id)
     
+
     return {
         "message": "Provenance analysis started",
         "analysis_id": analysis_id,

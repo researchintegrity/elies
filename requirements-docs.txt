@@ -1,0 +1,3 @@
+# Documentation site (mkdocs serve / mkdocs build)
+mkdocs==1.6.1
+mkdocs-material==9.5.49

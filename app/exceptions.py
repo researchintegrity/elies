@@ -207,3 +207,24 @@ class FileOperationError(ELIESException):
         if reason:
             parts.append(f" ({reason})")
         super().__init__("".join(parts))
+
+
+class TransientError(ELIESException):
+    """
+    A temporary infrastructure failure (service or daemon unreachable).
+
+    Celery tasks retry these with backoff; any other error fails the task.
+    """
+    status_code = 503
+
+    def __init__(self, message: str = "Service temporarily unavailable"):
+        super().__init__(message)
+
+
+class DockerUnavailableError(TransientError):
+    """The Docker daemon could not be reached to run an analysis tool."""
+
+
+class TooManyJobsError(ELIESException):
+    """The user already has the maximum number of active jobs (HTTP 429)."""
+    status_code = 429

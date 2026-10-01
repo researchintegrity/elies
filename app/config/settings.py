@@ -1,46 +1,106 @@
 """
 Application-wide configuration settings
 
-This module centralizes all hardcoded configuration values to make the
-application more maintainable and configurable. All magic numbers and
-strings are defined here as constants.
-
-To customize settings:
-1. Modify the constants below
-2. Import from this module in your code
-3. No need to change multiple files
+Every value that can differ between deployments is read from the environment
+here (documented in .env.example), so the API and the Celery workers share one
+validated configuration. Constants that are not deployment-specific live here
+too, to keep magic numbers out of the code.
 """
 
 import os
 from pathlib import Path
-from typing import Union
+from typing import List, Union
+
+from dotenv import load_dotenv
+
+# Read .env before any setting below (real environment variables take precedence)
+load_dotenv()
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        raise ValueError(f"Environment variable {name} must be an integer, got {value!r}")
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        raise ValueError(f"Environment variable {name} must be a number, got {value!r}")
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_list(name: str, default: List[str]) -> List[str]:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return list(default)
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _required_path(name: str) -> Path:
+    value = os.getenv(name)
+    if not value:
+        raise ValueError(f"{name} environment variable must be set (see .env.example)")
+    return Path(value)
+
 
 # ============================================================================
 # FILE STORAGE SETTINGS
 # ============================================================================
 
-# Base directory for all user uploads and workspace files
+# Workspace root as seen by this process (inside the API/worker containers)
+CONTAINER_WORKSPACE_PATH = _required_path("CONTAINER_WORKSPACE_PATH")
+# The same directory as seen by the Docker daemon on the host (for tool mounts)
+HOST_WORKSPACE_PATH = _required_path("HOST_WORKSPACE_PATH")
 
-
-
-
-# Path constants
-CONTAINER_WORKSPACE_PATH = Path(os.getenv("CONTAINER_WORKSPACE_PATH"))
-if CONTAINER_WORKSPACE_PATH is None:
-    raise ValueError("CONTAINER_WORKSPACE_PATH environment variable must be set")
 EXTRACTION_SUBDIRECTORY = "images/extracted"
 
-# Workspace root directory (can be overridden by environment variable)
-HOST_WORKSPACE_PATH = Path(os.getenv("HOST_WORKSPACE_PATH"))
-if HOST_WORKSPACE_PATH is None:
-    raise ValueError("HOST_WORKSPACE_PATH environment variable must be set")
+# Base directory for all user uploads and workspace files
+UPLOAD_DIR = CONTAINER_WORKSPACE_PATH
 
-RUNNING_ENV =os.getenv("ENVIRONMENT", "")
-if RUNNING_ENV != "TEST":
-    # Use absolute path for workspace to avoid issues with relative paths in different contexts
-    UPLOAD_DIR = Path(CONTAINER_WORKSPACE_PATH)
-else:
-    UPLOAD_DIR = Path(HOST_WORKSPACE_PATH)
+# ============================================================================
+# LOGGING, CORS AND SERVICE CONNECTIONS
+# ============================================================================
+
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_FORMAT = os.getenv("LOG_FORMAT", "text").lower()  # "text" or "json"
+
+# Browser origins allowed to call the API (comma-separated)
+ALLOWED_ORIGINS = _env_list(
+    "ALLOWED_ORIGINS",
+    ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000"],
+)
+
+# Redis (Celery broker and result backend)
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = _env_int("REDIS_PORT", 6379)
+REDIS_DB = _env_int("REDIS_DB", 0)
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
+
+
+def _redis_url(db: int) -> str:
+    auth = f":{REDIS_PASSWORD}@" if REDIS_PASSWORD else ""
+    return f"redis://{auth}{REDIS_HOST}:{REDIS_PORT}/{db}"
+
+
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL") or _redis_url(REDIS_DB)
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND") or _redis_url(REDIS_DB + 1)
+# Redis used to publish job events to the API's SSE streams
+JOB_EVENTS_REDIS_URL = os.getenv("JOB_EVENTS_REDIS_URL") or _redis_url(REDIS_DB)
 
 
 # ============================================================================
@@ -57,8 +117,6 @@ PDF_WATERMARK_REMOVAL_DOCKER_IMAGE = "pdf-watermark-removal:latest"
 # Use format placeholder `{mode}` for aggressiveness mode.
 WATERMARK_REMOVAL_OUTPUT_SUFFIX_TEMPLATE = "_watermark_removed_m{mode}.pdf"
 
-# Working directory inside the watermark-removal Docker container
-WATERMARK_REMOVAL_DOCKER_WORKDIR = CONTAINER_WORKSPACE_PATH
 
 # Docker image for panel extraction (system_modules/panel-extractor)
 PANEL_EXTRACTOR_DOCKER_IMAGE = "panel-extractor:latest"
@@ -67,23 +125,25 @@ PANEL_EXTRACTOR_DOCKER_IMAGE = "panel-extractor:latest"
 PANEL_EXTRACTION_DOCKER_WORKDIR = CONTAINER_WORKSPACE_PATH
 
 # Panel extraction settings
-PANEL_EXTRACTION_TIMEOUT = 600  # 10 minutes (panel extraction can take longer)
-MAX_IMAGES_PER_EXTRACTION = 20  # Maximum number of images to process in one batch
+PANEL_EXTRACTION_TIMEOUT = _env_int("PANEL_EXTRACTION_TIMEOUT", 600)  # 10 minutes
+MAX_IMAGES_PER_EXTRACTION = _env_int("MAX_IMAGES_PER_EXTRACTION", 20)  # Max images per panel extraction request
+# Upper bound for list fields in requests (image ids to index/delete/search over)
+MAX_IDS_PER_REQUEST = _env_int("MAX_IDS_PER_REQUEST", 1000)
+# Upper bound on the nodes explored when building a relationship graph (issue #72)
+RELATIONSHIP_GRAPH_MAX_NODES = _env_int("RELATIONSHIP_GRAPH_MAX_NODES", 2000)
 
 # Docker image for Copy-Move Detection - Dense method (system_modules/copy-move-detection)
 COPY_MOVE_DETECTION_DOCKER_IMAGE = "copy-move-detection:latest"
-COPY_MOVE_DETECTION_TIMEOUT = 600  # 10 minutes
-COPY_MOVE_DETECTION_DOCKER_WORKDIR = CONTAINER_WORKSPACE_PATH
+COPY_MOVE_DETECTION_TIMEOUT = _env_int("COPY_MOVE_DETECTION_TIMEOUT", 600)
 
 # Docker image for Copy-Move Detection - Keypoint method (system_modules/copy-move-detection-keypoint)
 COPY_MOVE_KEYPOINT_DOCKER_IMAGE = "copy-move-detection-keypoint:latest"
-COPY_MOVE_KEYPOINT_TIMEOUT = 600  # 10 minutes
+COPY_MOVE_KEYPOINT_TIMEOUT = _env_int("COPY_MOVE_KEYPOINT_TIMEOUT", 600)
 
 # Docker image for TruFor Detection (system_modules/TruFor)
 TRUFOR_DOCKER_IMAGE = "trufor:latest"
-TRUFOR_TIMEOUT = 600  # 10 minutes
-TRUFOR_DOCKER_WORKDIR = CONTAINER_WORKSPACE_PATH
-TRUFOR_USE_GPU = os.getenv("TRUFOR_USE_GPU", "true").lower() == "true"
+TRUFOR_TIMEOUT = _env_int("TRUFOR_TIMEOUT", 600)
+TRUFOR_USE_GPU = _env_bool("TRUFOR_USE_GPU", False)
 
 # ============================================================================
 # CBIR (Content-Based Image Retrieval) SETTINGS
@@ -92,15 +152,17 @@ TRUFOR_USE_GPU = os.getenv("TRUFOR_USE_GPU", "true").lower() == "true"
 # When running locally, use 'localhost:8001'
 # The CBIR_SERVICE_HOST is the hostname/IP of the CBIR microservice
 CBIR_SERVICE_HOST = os.getenv("CBIR_SERVICE_HOST", "localhost")
-CBIR_SERVICE_PORT = int(os.getenv("CBIR_SERVICE_PORT", "8001"))
+CBIR_SERVICE_PORT = _env_int("CBIR_SERVICE_PORT", 8001)
 CBIR_SERVICE_URL = os.getenv(
     "CBIR_SERVICE_URL",
     f"http://{CBIR_SERVICE_HOST}:{CBIR_SERVICE_PORT}"
 )
-CBIR_TIMEOUT = int(os.getenv("CBIR_TIMEOUT", "120"))  # 2 minutes default
+CBIR_TIMEOUT = _env_int("CBIR_TIMEOUT", 120)  # 2 minutes default
+# How long a CBIR health check result is reused before asking the service again
+CBIR_HEALTH_CACHE_SECONDS = _env_int("CBIR_HEALTH_CACHE_SECONDS", 15)
 
 # Batch indexing: number of images to process per chunk for progress updates
-INDEXING_BATCH_CHUNK_SIZE = int(os.getenv("INDEXING_BATCH_CHUNK_SIZE", "16"))
+INDEXING_BATCH_CHUNK_SIZE = _env_int("INDEXING_BATCH_CHUNK_SIZE", 16)
 
 # ============================================================================
 # PROVENANCE ANALYSIS SETTINGS
@@ -108,17 +170,33 @@ INDEXING_BATCH_CHUNK_SIZE = int(os.getenv("INDEXING_BATCH_CHUNK_SIZE", "16"))
 # When running inside Docker, use container name 'provenance-service'
 # When running locally, use 'localhost:8002'
 PROVENANCE_SERVICE_HOST = os.getenv("PROVENANCE_SERVICE_HOST", "localhost")
-PROVENANCE_SERVICE_PORT = int(os.getenv("PROVENANCE_SERVICE_PORT", "8002"))
+PROVENANCE_SERVICE_PORT = _env_int("PROVENANCE_SERVICE_PORT", 8002)
 PROVENANCE_SERVICE_URL = os.getenv(
     "PROVENANCE_SERVICE_URL",
     f"http://{PROVENANCE_SERVICE_HOST}:{PROVENANCE_SERVICE_PORT}"
 )
-PROVENANCE_TIMEOUT = int(os.getenv("PROVENANCE_TIMEOUT", "600"))  # 10 minutes default
+PROVENANCE_TIMEOUT = _env_int("PROVENANCE_TIMEOUT", 600)  # 10 minutes default
 
 # Extraction timeouts (in seconds)
-DOCKER_EXTRACTION_TIMEOUT = 300  # 5 minutes
-DOCKER_COMPOSE_EXTRACTION_TIMEOUT = 300  # 5 minutes
-DOCKER_IMAGE_CHECK_TIMEOUT = 10  # Check if image exists
+DOCKER_EXTRACTION_TIMEOUT = _env_int("DOCKER_EXTRACTION_TIMEOUT", 300)  # PDF image extraction
+WATERMARK_REMOVAL_TIMEOUT = _env_int("WATERMARK_REMOVAL_TIMEOUT", 300)
+
+# ============================================================================
+# ANALYSIS TOOL CONTAINERS (app/utils/docker_runner.py)
+# ============================================================================
+# Every tool runs in its own named container that is killed when it exceeds
+# its timeout. Inputs are mounted read-only.
+DOCKER_BINARY = os.getenv("DOCKER_BINARY", "docker")
+# Network for tool containers: "none" (default; the tool images ship their
+# model weights) or e.g. "bridge" if a tool needs to download at runtime
+DOCKER_TOOL_NETWORK = os.getenv("DOCKER_TOOL_NETWORK", "none")
+# Optional resource limits, in docker run syntax (e.g. "8g", "2.5")
+DOCKER_TOOL_MEMORY = os.getenv("DOCKER_TOOL_MEMORY", "")
+DOCKER_TOOL_CPUS = os.getenv("DOCKER_TOOL_CPUS", "")
+DOCKER_TOOL_PIDS_LIMIT = _env_int("DOCKER_TOOL_PIDS_LIMIT", 1024)
+# Optional user for tool containers (e.g. "1000:1000"); output directories
+# must then be writable by that user
+DOCKER_TOOL_USER = os.getenv("DOCKER_TOOL_USER", "")
 
 
 
@@ -139,7 +217,12 @@ CELERY_RETRY_BACKOFF_BASE = 2  # Exponential backoff multiplier
 CELERY_RESULT_EXPIRES = 3600  # 1 hour
 
 # Job monitoring settings
-JOB_RETENTION_DAYS = int(os.getenv("JOB_RETENTION_DAYS", "7"))  # Days to retain job logs
+JOB_RETENTION_DAYS = _env_int("JOB_RETENTION_DAYS", 7)  # Days to retain job logs
+# Most analysis jobs (tool runs, extractions) a user may have pending or running
+MAX_ACTIVE_JOBS_PER_USER = _env_int("MAX_ACTIVE_JOBS_PER_USER", 20)
+# Jobs not updated for this long are considered abandoned by a dead worker
+STALE_PROCESSING_MINUTES = _env_int("STALE_PROCESSING_MINUTES", 60)
+STALE_PENDING_HOURS = _env_int("STALE_PENDING_HOURS", 24)
 
 # Redis connection timeouts
 CELERY_REDIS_SOCKET_CONNECT_TIMEOUT = 5
@@ -167,8 +250,18 @@ IMAGE_MIME_TYPES = {
 USERNAME_MIN_LENGTH = 3
 USERNAME_MAX_LENGTH = 50
 
-# Password constraints
-PASSWORD_MIN_LENGTH = 4
+# Usernames: letters, digits, '.', '_' and '-'
+USERNAME_PATTERN = r"^[A-Za-z0-9_.-]+$"
+
+# Password constraints. bcrypt ignores everything after 72 bytes, so longer
+# passwords are rejected rather than silently truncated.
+PASSWORD_MIN_LENGTH = _env_int("PASSWORD_MIN_LENGTH", 12)
+PASSWORD_MAX_BYTES = 72
+
+# Brute-force protection for /auth/login and /auth/register
+LOGIN_MAX_FAILURES = _env_int("LOGIN_MAX_FAILURES", 10)  # per client IP + account
+LOGIN_FAILURE_WINDOW_SECONDS = _env_int("LOGIN_FAILURE_WINDOW_SECONDS", 900)
+REGISTRATION_MAX_PER_HOUR = _env_int("REGISTRATION_MAX_PER_HOUR", 20)  # per client IP
 
 # Full name constraints
 FULL_NAME_MAX_LENGTH = 100
@@ -181,32 +274,22 @@ FULL_NAME_MAX_LENGTH = 100
 DEFAULT_THUMBNAIL_SIZE = (300, 300)  # Max width x height in pixels
 THUMBNAIL_JPEG_QUALITY = 85  # JPEG quality (1-100)
 
+# Largest image (width * height) accepted on upload or decoded for thumbnails.
+# Guards against decompression bombs; raise it for very large microscopy scans.
+MAX_IMAGE_PIXELS = _env_int("MAX_IMAGE_PIXELS", 200_000_000)
+
+# Maximum number of files accepted by one batch image upload request
+MAX_BATCH_UPLOAD_FILES = _env_int("MAX_BATCH_UPLOAD_FILES", 200)
+
+# Maximum ids returned by GET /images/ids ("select all")
+MAX_SELECT_ALL_IDS = _env_int("MAX_SELECT_ALL_IDS", 10000)
+
 # Password hashing settings
-BCRYPT_ROUNDS = 12  # bcrypt cost factor
+BCRYPT_ROUNDS = _env_int("BCRYPT_ROUNDS", 12)  # bcrypt cost factor (tests lower it for speed)
 
 # ============================================================================
 # UTILITY FUNCTIONS
 # ============================================================================
-
-def get_extraction_path_template() -> str:
-    """
-    Get the path template for extracted images.
-    
-    Returns:
-        Template string: {user_id}/images/extracted/{doc_id}/{filename}
-    """
-    return f"{{user_id}}/{EXTRACTION_SUBDIRECTORY}/{{doc_id}}/{{filename}}"
-
-
-def get_container_path_prefix() -> Path:
-    """
-    Get the prefix used for container paths (for path detection).
-    
-    Returns:
-        Container path prefix as Path object.
-    """
-    return CONTAINER_WORKSPACE_PATH
-
 
 def is_container_path(path: Union[str, Path]) -> bool:
     """

@@ -11,7 +11,7 @@ from bson import ObjectId
 from app.exceptions import ResourceNotFoundError, ValidationError
 
 
-async def get_owned_resource(
+def get_owned_resource(
     collection_getter: Callable,
     resource_id: str,
     user_id: str,
@@ -59,53 +59,3 @@ async def get_owned_resource(
     return resource
 
 
-async def get_resource_by_id(
-    collection_getter: Callable,
-    resource_id: str,
-    resource_name: str = "Resource"
-) -> Dict[str, Any]:
-    """
-    Retrieve a resource by ID without ownership check (use cautiously).
-    
-    Useful for admin operations or when user_id isn't available.
-    Prefer get_owned_resource for user-scoped operations.
-    
-    Args:
-        collection_getter: Function that returns the MongoDB collection.
-        resource_id: Resource ID to retrieve (as string).
-        resource_name: Human-readable name for error messages.
-        
-    Returns:
-        Document dictionary from MongoDB.
-        
-    Raises:
-        ValidationError: If resource_id is not a valid ObjectId format.
-        ResourceNotFoundError: If resource not found.
-    """
-    try:
-        resource_oid = ObjectId(resource_id)
-    except Exception:
-        raise ValidationError(f"Invalid {resource_name.lower()} ID format")
-    
-    collection = collection_getter()
-    resource = collection.find_one({"_id": resource_oid})
-    
-    if not resource:
-        raise ResourceNotFoundError(resource_name, resource_id)
-    
-    return resource
-
-
-def convert_objectid_to_string(resource: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Convert MongoDB ObjectId to string for JSON serialization.
-    
-    Args:
-        resource: Dictionary potentially containing ObjectId
-        
-    Returns:
-        Dictionary with ObjectId fields converted to strings
-    """
-    if isinstance(resource.get("_id"), ObjectId):
-        resource["_id"] = str(resource["_id"])
-    return resource

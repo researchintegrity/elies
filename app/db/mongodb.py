@@ -1,16 +1,28 @@
 """
-MongoDB database connection and configuration
+MongoDB database connection and configuration.
+
+Indexes are declared in INDEXES and created once per process when the
+connection is opened (API startup, or a Celery worker's first database
+access), not on every collection access (issue #70).
 """
 import logging
 import os
+from typing import Any, Dict, List, Tuple
 
 from dotenv import load_dotenv
-from fastapi import HTTPException, status
-from pymongo import MongoClient
+from pymongo import ASCENDING, DESCENDING, MongoClient
+from pymongo.errors import PyMongoError
+
+from app.exceptions import TransientError
 
 load_dotenv()
 
 logger = logging.getLogger(__name__)
+
+
+class DatabaseUnavailableError(TransientError):
+    """MongoDB could not be reached (HTTP 503; Celery tasks retry it)."""
+
 
 # These are read dynamically so test fixtures can override them
 def get_mongodb_url():
@@ -18,6 +30,106 @@ def get_mongodb_url():
 
 def get_database_name():
     return os.getenv("DATABASE_NAME", "elies_system")
+
+
+IndexSpec = Tuple[Any, Dict[str, Any]]
+
+# collection name -> [(keys, create_index options)]
+INDEXES: Dict[str, List[IndexSpec]] = {
+    "users": [
+        ("username", {"unique": True}),
+        ("email", {"unique": True}),
+    ],
+    "documents": [
+        ("user_id", {}),
+        ("uploaded_date", {}),
+        ([("user_id", ASCENDING), ("uploaded_date", DESCENDING)], {}),
+    ],
+    "images": [
+        ("user_id", {}),
+        ("document_id", {}),
+        ("uploaded_date", {}),
+        ("source_type", {}),
+        ([("user_id", ASCENDING), ("source_type", ASCENDING)], {}),
+        ([("document_id", ASCENDING), ("source_type", ASCENDING)], {}),
+    ],
+    "single_annotations": [
+        ("user_id", {}),
+        ("image_id", {}),
+        ("created_at", {}),
+        ([("user_id", ASCENDING), ("image_id", ASCENDING)], {}),
+        ([("image_id", ASCENDING), ("created_at", DESCENDING)], {}),
+    ],
+    "dual_annotations": [
+        ("user_id", {}),
+        ("source_image_id", {}),  # image where the annotation is drawn
+        ("target_image_id", {}),  # linked target image
+        ("link_id", {}),
+        ("created_at", {}),
+        ([("user_id", ASCENDING), ("source_image_id", ASCENDING)], {}),
+        ([("user_id", ASCENDING), ("target_image_id", ASCENDING)], {}),
+        ([("user_id", ASCENDING), ("link_id", ASCENDING)], {}),
+        ([("source_image_id", ASCENDING), ("target_image_id", ASCENDING)], {}),
+    ],
+    "analyses": [
+        ("user_id", {}),
+        ("source_image_id", {}),
+        ("target_image_id", {}),
+        ("type", {}),
+        ("status", {}),
+        ("created_at", {}),
+        # Analysis dashboard queries
+        ([("user_id", ASCENDING), ("created_at", DESCENDING)], {}),
+        ([("user_id", ASCENDING), ("type", ASCENDING), ("created_at", DESCENDING)], {}),
+        ([("user_id", ASCENDING), ("status", ASCENDING), ("created_at", DESCENDING)], {}),
+        ([("user_id", ASCENDING), ("source_image_id", ASCENDING)], {}),
+    ],
+    "image_relationships": [
+        ("user_id", {}),
+        ("image1_id", {}),
+        ("image2_id", {}),
+        ("source_type", {}),
+        ("created_at", {}),
+        # One relationship per image pair (IDs are stored sorted)
+        ([("user_id", ASCENDING), ("image1_id", ASCENDING), ("image2_id", ASCENDING)], {"unique": True}),
+        ([("user_id", ASCENDING), ("image2_id", ASCENDING)], {}),
+    ],
+    "indexing_jobs": [
+        ("user_id", {}),
+        ("status", {}),
+        ("created_at", {}),
+        ([("user_id", ASCENDING), ("created_at", DESCENDING)], {}),
+    ],
+    "admin_audit_log": [
+        ([("created_at", DESCENDING)], {}),
+        ([("target_user_id", ASCENDING), ("created_at", DESCENDING)], {}),
+    ],
+    "jobs": [
+        ("user_id", {}),
+        ("job_type", {}),
+        ("status", {}),
+        ("created_at", {}),
+        ([("user_id", ASCENDING), ("created_at", DESCENDING)], {}),
+        ([("user_id", ASCENDING), ("job_type", ASCENDING), ("created_at", DESCENDING)], {}),
+        # TTL: MongoDB deletes jobs once expires_at has passed
+        ("expires_at", {"expireAfterSeconds": 0}),
+    ],
+}
+
+
+def ensure_indexes(db) -> None:
+    """
+    Create every index in INDEXES (idempotent). A failing index, e.g. a
+    unique index over existing duplicates, is logged and does not stop the
+    others.
+    """
+    for collection_name, specs in INDEXES.items():
+        collection = db[collection_name]
+        for keys, options in specs:
+            try:
+                collection.create_index(keys, **options)
+            except PyMongoError as e:
+                logger.error("Could not create index %s on %s: %s", keys, collection_name, e)
 
 
 class MongoDBConnection:
@@ -32,37 +144,50 @@ class MongoDBConnection:
         return cls._instance
 
     def connect(self) -> None:
-        """Connect to MongoDB."""
+        """
+        Connect to MongoDB and make sure the indexes exist.
+
+        Raises:
+            DatabaseUnavailableError: MongoDB could not be reached
+        """
+        database_name = get_database_name()
         try:
-            mongodb_url = get_mongodb_url()
-            database_name = get_database_name()
-            self._client = MongoClient(mongodb_url, serverSelectionTimeoutMS=5000)
-            self._client.admin.command('ping')
-            self._db = self._client[database_name]
-            logger.info("Connected to MongoDB: %s", database_name)
-        except Exception as e:
-            logger.error("MongoDB connection failed: %s", str(e))
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail=f"MongoDB connection failed: {str(e)}"
-            )
+            # tz_aware: datetimes come back as aware UTC, so the API emits them
+            # with an explicit offset (clients otherwise read them as local time)
+            client: MongoClient = MongoClient(get_mongodb_url(), serverSelectionTimeoutMS=5000, tz_aware=True)
+            client.admin.command('ping')
+        except PyMongoError as e:
+            logger.error("MongoDB connection failed: %s", e)
+            raise DatabaseUnavailableError("The database is unavailable. Please try again later.") from e
+        self._client = client
+        self._db = client[database_name]
+        logger.info("Connected to MongoDB: %s", database_name)
+        ensure_indexes(self._db)
 
     def disconnect(self) -> None:
         """Disconnect from MongoDB."""
         if self._client:
             self._client.close()
             logger.info("Disconnected from MongoDB")
+        self.reset()
+
+    def reset(self) -> None:
+        """
+        Forget the client without closing it. Used in forked Celery worker
+        processes: a MongoClient must not be shared across a fork.
+        """
+        self._client = None
+        self._db = None
 
     def get_database(self):
-        """Get database instance"""
+        """Get database instance (connecting on first use)"""
         if self._db is None:
             self.connect()
         return self._db
 
     def get_collection(self, collection_name: str):
         """Get a specific collection"""
-        db = self.get_database()
-        return db[collection_name]
+        return self.get_database()[collection_name]
 
 
 # Global database connection instance
@@ -70,166 +195,54 @@ db_connection = MongoDBConnection()
 
 
 def get_users_collection():
-    """Get users collection with indexes"""
-    collection = db_connection.get_collection("users")
-    
-    # Create indexes for better performance
-    collection.create_index("username", unique=True)
-    collection.create_index("email", unique=True)
-    
-    return collection
+    return db_connection.get_collection("users")
 
 
 def get_documents_collection():
-    """Get documents collection with indexes for PDF uploads"""
-    collection = db_connection.get_collection("documents")
-    
-    # Create indexes for better performance
-    collection.create_index("user_id")
-    collection.create_index("uploaded_date")
-    collection.create_index([("user_id", 1), ("uploaded_date", -1)])
-    
-    return collection
+    """PDF documents uploaded by users"""
+    return db_connection.get_collection("documents")
 
 
 def get_images_collection():
-    """Get images collection with indexes for extracted/uploaded images"""
-    collection = db_connection.get_collection("images")
-    
-    # Create indexes for better performance
-    collection.create_index("user_id")
-    collection.create_index("document_id")
-    collection.create_index("uploaded_date")
-    collection.create_index("source_type")
-    collection.create_index([("user_id", 1), ("source_type", 1)])
-    collection.create_index([("document_id", 1), ("source_type", 1)])
-    
-    return collection
-
+    """Extracted and uploaded images"""
+    return db_connection.get_collection("images")
 
 
 def get_single_annotations_collection():
-    """Get single_annotations collection for single-image annotations"""
-    collection = db_connection.get_collection("single_annotations")
-    
-    # Create indexes for better performance
-    collection.create_index("user_id")
-    collection.create_index("image_id")
-    collection.create_index("created_at")
-    collection.create_index([("user_id", 1), ("image_id", 1)])
-    collection.create_index([("image_id", 1), ("created_at", -1)])
-    
-    return collection
+    """Single-image annotations"""
+    return db_connection.get_collection("single_annotations")
 
 
 def get_dual_annotations_collection():
-    """Get dual_annotations collection for cross-image annotations"""
-    collection = db_connection.get_collection("dual_annotations")
-    
-    # Create indexes for better performance
-    collection.create_index("user_id")
-    collection.create_index("source_image_id")  # Image where annotation is drawn
-    collection.create_index("target_image_id")  # Linked target image
-    collection.create_index("link_id")
-    collection.create_index("created_at")
-    collection.create_index([("user_id", 1), ("source_image_id", 1)])
-    collection.create_index([("user_id", 1), ("target_image_id", 1)])
-    collection.create_index([("user_id", 1), ("link_id", 1)])
-    collection.create_index([("source_image_id", 1), ("target_image_id", 1)])
-    
-    return collection
+    """Cross-image annotations"""
+    return db_connection.get_collection("dual_annotations")
 
 
 def get_analyses_collection():
-    """Get analyses collection with indexes for copy-move detection and analysis dashboard"""
-    collection = db_connection.get_collection("analyses")
-    
-    # Create indexes for better performance
-    collection.create_index("user_id")
-    collection.create_index("source_image_id")
-    collection.create_index("target_image_id")
-    collection.create_index("type")
-    collection.create_index("status")
-    collection.create_index("created_at")
-    # Compound indexes for common Analysis Dashboard queries
-    collection.create_index([("user_id", 1), ("created_at", -1)])
-    collection.create_index([("user_id", 1), ("type", 1), ("created_at", -1)])
-    collection.create_index([("user_id", 1), ("status", 1), ("created_at", -1)])
-    collection.create_index([("user_id", 1), ("source_image_id", 1)])
-    
-    return collection
+    """Copy-move, TruFor, CBIR and provenance analyses"""
+    return db_connection.get_collection("analyses")
 
 
 def get_relationships_collection():
-    """Get image_relationships collection for storing image-to-image relationships"""
-    collection = db_connection.get_collection("image_relationships")
-    
-    # Create indexes for better performance
-    collection.create_index("user_id")
-    collection.create_index("image1_id")
-    collection.create_index("image2_id")
-    collection.create_index("source_type")
-    collection.create_index("created_at")
-    # Unique compound index to prevent duplicate relationships (IDs are normalized/sorted)
-    collection.create_index(
-        [("user_id", 1), ("image1_id", 1), ("image2_id", 1)],
-        unique=True
-    )
-    # Query relationships for an image (check both directions)
-    collection.create_index([("user_id", 1), ("image1_id", 1)])
-    collection.create_index([("user_id", 1), ("image2_id", 1)])
-    
-    return collection
-
-
-# Flag to track if indexing_jobs indexes have been created
-_indexing_jobs_indexes_created = False
+    """Image-to-image relationships"""
+    return db_connection.get_collection("image_relationships")
 
 
 def get_indexing_jobs_collection():
-    """Get indexing_jobs collection for tracking batch indexing progress"""
-    global _indexing_jobs_indexes_created
-    collection = db_connection.get_collection("indexing_jobs")
-    
-    # Create indexes only once (on first access)
-    if not _indexing_jobs_indexes_created:
-        collection.create_index("user_id", background=True)
-        collection.create_index("status", background=True)
-        collection.create_index("created_at", background=True)
-        collection.create_index([("user_id", 1), ("created_at", -1)], background=True)
-        _indexing_jobs_indexes_created = True
-    
-    return collection
-
-
-# Flag to track if jobs indexes have been created
-_jobs_indexes_created = False
+    """Batch CBIR indexing progress"""
+    return db_connection.get_collection("indexing_jobs")
 
 
 def get_jobs_collection():
-    """Get jobs collection for unified background job tracking with TTL expiration"""
-    global _jobs_indexes_created
-    collection = db_connection.get_collection("jobs")
-    
-    # Create indexes only once (on first access)
-    if not _jobs_indexes_created:
-        try:
-            collection.create_index("user_id", background=True)
-            collection.create_index("job_type", background=True)
-            collection.create_index("status", background=True)
-            collection.create_index("created_at", background=True)
-            collection.create_index([("user_id", 1), ("created_at", -1)], background=True)
-            collection.create_index([("user_id", 1), ("job_type", 1), ("created_at", -1)], background=True)
-            # TTL index: auto-delete documents when expires_at timestamp passes
-            collection.create_index("expires_at", expireAfterSeconds=0, background=True)
-            _jobs_indexes_created = True
-        except Exception as e:
-            logger.warning(f"Error creating indexes for jobs collection: {e}")
-    
-    return collection
+    """Unified background job tracking (expires through a TTL index)"""
+    return db_connection.get_collection("jobs")
+
+
+def get_admin_audit_log_collection():
+    """Audit trail of administrator actions"""
+    return db_connection.get_collection("admin_audit_log")
 
 
 def get_database():
     """Get database instance"""
     return db_connection.get_database()
-

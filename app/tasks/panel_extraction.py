@@ -4,21 +4,20 @@ Panel extraction tasks for async processing
 import os
 import logging
 from typing import Dict, List, Any
-from datetime import datetime
-from celery.exceptions import SoftTimeLimitExceeded
+from datetime import datetime, timezone
 from bson import ObjectId
 from app.celery_config import celery_app
 from app.db.mongodb import get_images_collection
 from app.utils.docker_panel_extractor import extract_panels_with_docker
 from app.config.settings import (
-    CELERY_MAX_RETRIES, 
-    CELERY_RETRY_BACKOFF_BASE,
-    convert_container_path_to_host,
+    CELERY_MAX_RETRIES,
     convert_host_path_to_container
 )
 from app.schemas import JobType, JobStatus
-from app.services.job_logger import create_job_log, update_job_progress, complete_job
+from app.services.job_logger import update_job_progress, complete_job
+from app.services.storage_service import add_storage
 from app.tasks.cbir import cbir_index_batch
+from app.tasks.lifecycle import TrackedJob, handle_task_exception
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +28,7 @@ def extract_panels_from_images(
     image_ids: List[str],
     user_id: str,
     image_paths: List[str],
-    job_id: str = None
+    job_id: str | None = None
 ):
     """
     Extract panels from images asynchronously
@@ -58,22 +57,20 @@ def extract_panels_from_images(
     """
     images_col = get_images_collection()
     task_id = self.request.id
+    job = TrackedJob.ensure(
+        self, user_id, job_id, JobType.PANEL_EXTRACTION, f"Panel Extraction ({len(image_ids)} images)",
+        {"image_ids": image_ids},
+    )
+    job_id = job.job_id
+
+    def fail(error_msg: str) -> Dict[str, Any]:
+        job.fail(error_msg)
+        return _handle_panel_extraction_failure(task_id, image_ids, user_id, error_msg)
 
     try:
-        # Use provided job_id or create one if not provided (backward compatibility)
-        if not job_id:
-            job_id = create_job_log(
-                user_id=user_id,
-                job_type=JobType.PANEL_EXTRACTION,
-                title=f"Panel Extraction ({len(image_ids)} images)",
-                celery_task_id=task_id,
-                input_data={"image_ids": image_ids}
-            )
-        
         update_job_progress(job_id, user_id, JobStatus.PROCESSING, 10, "Validating images...")
         logger.info(
-            f"Starting panel extraction for user_id={user_id}, "
-            f"task_id={task_id}, image_count={len(image_ids)}"
+            "Starting panel extraction for user_id=%s, task_id=%s, image_count=%s", user_id, task_id, len(image_ids)
         )
 
         # Validate all images exist and belong to user
@@ -83,24 +80,18 @@ def extract_panels_from_images(
                 if not image_doc:
                     error_msg = f"Image not found or does not belong to user: {img_id}"
                     logger.error(error_msg)
-                    return _handle_panel_extraction_failure(
-                        task_id, image_ids, user_id, error_msg
-                    )
+                    return fail(error_msg)
             except Exception as e:
                 error_msg = f"Error validating image {img_id}: {str(e)}"
                 logger.error(error_msg)
-                return _handle_panel_extraction_failure(
-                    task_id, image_ids, user_id, error_msg
-                )
+                return fail(error_msg)
 
         # Validate image files exist
         for img_path in image_paths:
             if not os.path.exists(img_path):
                 error_msg = f"Image file not found: {img_path}"
                 logger.error(error_msg)
-                return _handle_panel_extraction_failure(
-                    task_id, image_ids, user_id, error_msg
-                )
+                return fail(error_msg)
 
         update_job_progress(job_id, user_id, None, 30, "Running Docker panel extraction...")
         
@@ -112,11 +103,8 @@ def extract_panels_from_images(
         )
 
         if not success:
-            logger.error(f"Panel extraction failed: {status_message}")
-            complete_job(job_id, user_id, JobStatus.FAILED, errors=[status_message])
-            return _handle_panel_extraction_failure(
-                task_id, image_ids, user_id, status_message
-            )
+            logger.error("Panel extraction failed: %s", status_message)
+            return fail(status_message)
 
         # Parse PANELS.csv and create MongoDB documents
         panels_data = output_info.get("panels_data", [])
@@ -124,9 +112,10 @@ def extract_panels_from_images(
         output_dir = output_info.get("output_dir")
 
         update_job_progress(job_id, user_id, None, 60, f"Processing {panels_count} extracted panels...")
-        logger.info(f"Panel extraction completed. Processing {panels_count} panels...")
+        logger.info("Panel extraction completed. Processing %s panels...", panels_count)
 
         result_panel_ids = []
+        panel_bytes = 0
 
         for panel_info in panels_data:
             try:
@@ -140,10 +129,11 @@ def extract_panels_from_images(
                 # Insert into MongoDB
                 result = images_col.insert_one(panel_doc)
                 panel_mongodb_id = result.inserted_id
+                panel_bytes += panel_doc.get("file_size") or 0
                 panel_id_str = str(panel_mongodb_id)
                 result_panel_ids.append(panel_id_str)
 
-                logger.info(f"Created panel document: {panel_id_str} from {panel_info['panel_id']}")
+                logger.info("Created panel document: %s from %s", panel_id_str, panel_info['panel_id'])
                 
                 # ============================================================
                 # STEP 1: Rename panel file to use MongoDB _id
@@ -176,10 +166,10 @@ def extract_panels_from_images(
                             }
                         }
                     )
-                    logger.debug(f"Renamed panel file to {new_filename}")
+                    logger.debug("Renamed panel file to %s", new_filename)
                     
                 except Exception as e:
-                    logger.error(f"Failed to rename panel file for {panel_id_str}: {str(e)}", exc_info=True)
+                    logger.error("Failed to rename panel file for %s: %s", panel_id_str, str(e), exc_info=True)
                 
                 # ============================================================
                 # STEP 2: Merge panel_type into source_image.image_type
@@ -208,15 +198,14 @@ def extract_panels_from_images(
                                 {"$set": {"image_type": merged_types}}
                             )
                             logger.debug(
-                                f"Propagated panel_type '{panel_type}' to source image {source_image_id}: "
-                                f"{existing_types} → {merged_types}"
+                                "Propagated panel_type '%s' to source image %s: %s → %s", panel_type, source_image_id, existing_types, merged_types
                             )
                     else:
-                        logger.warning(f"Source image not found: {source_image_id}")
+                        logger.warning("Source image not found: %s", source_image_id)
                         
                 except Exception as e:
                     logger.error(
-                        f"Failed to propagate panel_type for panel {panel_id_str}: {str(e)}", 
+                        "Failed to propagate panel_type for panel %s: %s", panel_id_str, str(e), 
                         exc_info=True
                     )
 
@@ -225,21 +214,22 @@ def extract_panels_from_images(
                 logger.error(error_msg, exc_info=True)
                 # Continue processing other panels instead of failing entirely
 
+        # Panels are stored in the user's workspace and count against the quota
+        add_storage(user_id, panel_bytes)
+
         if not result_panel_ids:
             error_msg = "No panel documents were successfully created"
             logger.error(error_msg)
-            return _handle_panel_extraction_failure(
-                task_id, image_ids, user_id, error_msg
-            )
+            return fail(error_msg)
 
         # Clean up PANELS.csv after processing
         panels_csv_path = output_info.get("panels_csv_path")
         if panels_csv_path and os.path.exists(panels_csv_path):
             try:
                 os.remove(panels_csv_path)
-                logger.info(f"Deleted PANELS.csv: {panels_csv_path}")
+                logger.info("Deleted PANELS.csv: %s", panels_csv_path)
             except Exception as e:
-                logger.warning(f"Failed to delete PANELS.csv {panels_csv_path}: {str(e)}")
+                logger.warning("Failed to delete PANELS.csv %s: %s", panels_csv_path, str(e))
 
         # Trigger CBIR indexing for all successfully created panels
         if result_panel_ids:
@@ -261,9 +251,9 @@ def extract_panels_from_images(
                 
                 if cbir_items:
                     cbir_index_batch.delay(user_id=user_id, image_items=cbir_items)
-                    logger.info(f"Queued CBIR indexing for {len(cbir_items)} extracted panels")
+                    logger.info("Queued CBIR indexing for %s extracted panels", len(cbir_items))
             except Exception as cbir_error:
-                logger.warning(f"Failed to queue CBIR indexing for panels: {cbir_error}")
+                logger.warning("Failed to queue CBIR indexing for panels: %s", cbir_error)
                 # Don't fail panel extraction if CBIR indexing fails to queue
 
         # Success
@@ -282,29 +272,11 @@ def extract_panels_from_images(
             "error": None
         }
 
-        logger.info(f"Panel extraction completed: {result['message']}")
+        logger.info("Panel extraction completed: %s", result['message'])
         return result
 
-    except SoftTimeLimitExceeded:
-        error_msg = f"Panel extraction task timed out for user_id={user_id}"
-        logger.error(error_msg)
-        if job_id:
-            complete_job(job_id, user_id, JobStatus.FAILED, errors=[error_msg])
-        return _handle_panel_extraction_failure(task_id, image_ids, user_id, error_msg)
-
-    except Exception as e:
-        error_msg = f"Unexpected error during panel extraction for user_id={user_id}: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-
-        # Retry with exponential backoff
-        retry_delay = CELERY_RETRY_BACKOFF_BASE ** self.request.retries
-        try:
-            raise self.retry(exc=e, countdown=retry_delay)
-        except self.MaxRetriesExceededError:
-            logger.error(f"Max retries exceeded for panel extraction task {task_id}")
-            if job_id:
-                complete_job(job_id, user_id, JobStatus.FAILED, errors=[error_msg])
-            return _handle_panel_extraction_failure(task_id, image_ids, user_id, error_msg)
+    except BaseException as exc:  # noqa: BLE001 - re-raised by handle_task_exception
+        handle_task_exception(self, exc, job)
 
 
 def _create_panel_document(
@@ -361,9 +333,9 @@ def _create_panel_document(
             import shutil
             shutil.move(temp_panel_path, organized_panel_path)
             file_size = os.path.getsize(organized_panel_path)
-            logger.info(f"Organized panel file: {temp_panel_path} → {organized_panel_path}")
+            logger.info("Organized panel file: %s → %s", temp_panel_path, organized_panel_path)
         except Exception as e:
-            logger.error(f"Error organizing panel file: {str(e)}")
+            logger.error("Error organizing panel file: %s", str(e))
             # Fall back to temp location if move fails
             organized_panel_path = temp_panel_path
             if os.path.exists(temp_panel_path):
@@ -372,11 +344,11 @@ def _create_panel_document(
         # Already in organized location
         file_size = os.path.getsize(organized_panel_path)
     else:
-        logger.warning(f"Panel file not found: {temp_panel_path} or {organized_panel_path}")
+        logger.warning("Panel file not found: %s or %s", temp_panel_path, organized_panel_path)
 
     # Convert container path to host path for storage in MongoDB
     final_file_path = str(convert_host_path_to_container(organized_panel_path))
-    logger.debug(f"Container path: {organized_panel_path} → Host path: {final_file_path}")
+    logger.debug("Container path: %s → Host path: %s", organized_panel_path, final_file_path)
 
     # Fetch source image to get EXIF metadata
     images_col = get_images_collection()
@@ -394,8 +366,8 @@ def _create_panel_document(
         "panel_type": panel_type,
         "bbox": bbox,
         "image_type": [panel_type] if panel_type else [],  # Initialize with panel_type
-        "uploaded_date": datetime.utcnow(),
-        "created_at": datetime.utcnow(),
+        "uploaded_date": datetime.now(timezone.utc),
+        "created_at": datetime.now(timezone.utc),
         "exif_metadata": exif_metadata
     }
     
@@ -424,7 +396,7 @@ def _handle_panel_extraction_failure(
     Returns:
         Standardized failure response dict
     """
-    logger.error(f"Panel extraction failed for user {user_id}: {error_message}")
+    logger.error("Panel extraction failed for user %s: %s", user_id, error_message)
 
     return {
         "task_id": task_id,
@@ -432,6 +404,6 @@ def _handle_panel_extraction_failure(
         "image_ids": image_ids,
         "extracted_panels_count": 0,
         "result_panel_ids": [],
-        "message": f"Panel extraction failed",
+        "message": "Panel extraction failed",
         "error": error_message
     }

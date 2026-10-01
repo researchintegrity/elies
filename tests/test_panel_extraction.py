@@ -82,12 +82,11 @@ class TestSchemasValidation:
         assert request.model_type == "default"
 
     def test_panel_extraction_request_requires_image_ids(self):
-        """Test PanelExtractionRequest handles empty image_ids gracefully."""
-        # Pydantic allows empty lists, so we check that validation happens
-        # but the actual validation of "non-empty" should occur in service layer
-        request = PanelExtractionRequest(image_ids=[], model_type="default")
-        # Empty list is allowed at schema level - service layer validates actual content
-        assert len(request.image_ids) == 0
+        """PanelExtractionRequest rejects an empty image_ids list."""
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            PanelExtractionRequest(image_ids=[], model_type="default")
 
     def test_panel_extraction_status_response_pending(self):
         """Test PanelExtractionStatusResponse for pending status."""

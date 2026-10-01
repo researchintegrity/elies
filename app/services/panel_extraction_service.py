@@ -2,11 +2,15 @@
 Panel extraction service layer
 """
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 from bson import ObjectId
 from app.db.mongodb import get_images_collection
+from app.exceptions import ResourceNotFoundError, ValidationError
+from app.services.storage_service import user_quota_fields
+from app.services.resource_helpers import get_owned_resource
 from app.schemas import JobType
-from app.services.job_logger import create_job_log
+from app.services.job_logger import create_job_log, ensure_job_capacity, find_job_by_celery_task
+from app.services.task_submission import submit_task
 from app.tasks.panel_extraction import extract_panels_from_images
 logger = logging.getLogger(__name__)
 
@@ -30,70 +34,27 @@ def initiate_panel_extraction(
         }
 
     Raises:
-        ValueError: If validation fails
+        ValidationError / ResourceNotFoundError: If validation fails
     """
-    images_col = get_images_collection()
+    ensure_job_capacity(user_id)
 
-    # Validate images
     image_paths = []
     validated_ids = []
-
-    for img_id in image_ids:
-        try:
-            # Try to validate as a direct ObjectId first
-            image_doc = None
-            try:
-                image_doc = images_col.find_one(
-                    {"_id": ObjectId(img_id), "user_id": user_id}
-                )
-            except:
-                # If img_id is not a valid ObjectId, try looking it up by filename
-                # Format might be: docid-idx-filename
-                pass
-            
-            # If not found by ID, try parsing the synthetic ID format (docid-idx-filename)
-            if not image_doc and "-" in img_id:
-                try:
-                    # Extract filename from synthetic ID
-                    # Format: docid-idx-filename or docid-idx-rest-of-filename
-                    parts = img_id.split("-", 2)
-                    if len(parts) >= 3:
-                        filename = parts[2]  # Everything after the second dash
-                        # Look up by filename and user
-                        image_doc = images_col.find_one(
-                            {"filename": filename, "user_id": user_id}
-                        )
-                        if image_doc:
-                            # Update the ID to the actual MongoDB ID
-                            img_id = str(image_doc["_id"])
-                except:
-                    pass
-
-            if not image_doc:
-                raise ValueError(f"Image not found or does not belong to user: {img_id}")
-
-            # Only extracted and uploaded images can be used as source
-            if image_doc.get("source_type") not in ["extracted", "uploaded"]:
-                raise ValueError(
-                    f"Cannot extract panels from {image_doc.get('source_type')} type image"
-                )
-
-            # Verify file exists
-            file_path = image_doc.get("file_path")
-            if not file_path:
-                raise ValueError(f"Image document has no file_path: {img_id}")
-
-            image_paths.append(file_path)
-            validated_ids.append(img_id)
-
-            logger.debug(f"Validated image {img_id}: {file_path}")
-        except Exception as e:
-            error_msg = f"Error validating image {img_id}: {str(e)}"
-            logger.error(error_msg)
-            raise ValueError(error_msg)
+    for img_id in dict.fromkeys(image_ids):  # de-duplicate, keep order
+        image_doc = get_owned_resource(get_images_collection, img_id, user_id, "Image")
+        # Only extracted and uploaded images can be used as source
+        if image_doc.get("source_type") not in ["extracted", "uploaded"]:
+            raise ValidationError(
+                f"Cannot extract panels from {image_doc.get('source_type')} type image"
+            )
+        file_path = image_doc.get("file_path")
+        if not file_path:
+            raise ValidationError(f"Image has no stored file: {img_id}")
+        image_paths.append(file_path)
+        validated_ids.append(img_id)
 
     if not validated_ids:
-        raise ValueError("No valid images to process")
+        raise ValidationError("No valid images to process")
 
     # Create job log entry for the jobs dashboard (pending state)
     job_id = create_job_log(
@@ -103,29 +64,19 @@ def initiate_panel_extraction(
         input_data={"image_ids": validated_ids, "image_count": len(validated_ids)}
     )
 
-    # Queue Celery task
-    try:
-        task = extract_panels_from_images.delay(
-            image_ids=validated_ids,
-            user_id=user_id,
-            image_paths=image_paths,
-            job_id=job_id
-        )
-
-        result = {
-            "task_id": task.id,
-            "status": "queued",
-            "image_ids": validated_ids,
-            "message": f"Panel extraction queued for {len(validated_ids)} image(s)"
-        }
-
-        logger.info(f"Panel extraction task queued: {task.id} for user {user_id}")
-        return result
-
-    except Exception as e:
-        error_msg = f"Error queuing panel extraction task: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        raise ValueError(error_msg)
+    task = submit_task(extract_panels_from_images, dict(
+        image_ids=validated_ids,
+        user_id=user_id,
+        image_paths=image_paths,
+        job_id=job_id
+    ), owner_id=user_id, job_id=job_id)
+    logger.info("Panel extraction task queued: %s for user %s", task.id, user_id)
+    return {
+        "task_id": task.id,
+        "status": "queued",
+        "image_ids": validated_ids,
+        "message": f"Panel extraction queued for {len(validated_ids)} image(s)"
+    }
 
 
 def get_panel_extraction_status(
@@ -148,17 +99,15 @@ def get_panel_extraction_status(
     """
     from celery.result import AsyncResult
 
+    # Only the user who started the extraction may see its result
+    if not find_job_by_celery_task(task_id, user_id):
+        raise ResourceNotFoundError("Task", task_id)
+
     try:
         task_result = AsyncResult(task_id, app=extract_panels_from_images.app)
-
-        # Get basic task info
         task_state = task_result.state
-        task_info = task_result.info or {}
-
-        # Validate user owns this task by checking if returned image_ids
-        # Actually this is difficult without storing task metadata
-        # For now, we just return the status
-        # In production, you might store task metadata in a separate collection
+        # A failed task's info is the exception, not a result dict
+        task_info = task_result.info if isinstance(task_result.info, dict) else {}
 
         response = {
             "task_id": task_id,
@@ -166,8 +115,12 @@ def get_panel_extraction_status(
             "image_ids": task_info.get("image_ids", []),
             "extracted_panels_count": task_info.get("extracted_panels_count", 0),
             "message": task_info.get("message"),
-            "error": task_info.get("error")
+            "error": task_info.get("error") or (str(task_result.info) if task_result.failed() else None)
         }
+
+        # The task returns a failure summary (state SUCCESS) when extraction fails
+        if response["status"] == "completed" and task_info.get("status") == "failed":
+            response["status"] = "failed"
 
         # If task is completed, retrieve and include extracted panel documents
         if response["status"] == "completed":
@@ -175,26 +128,17 @@ def get_panel_extraction_status(
 
             if result_panel_ids:
                 try:
-                    images_col = get_images_collection()
-                    extracted_panels = []
-
-                    for panel_id in result_panel_ids:
-                        panel_doc = images_col.find_one(
-                            {"_id": ObjectId(panel_id), "user_id": user_id}
-                        )
-
-                        if panel_doc:
-                            # Convert to response format
-                            panel_response = _convert_document_to_response(panel_doc)
-                            extracted_panels.append(panel_response)
-
-                    response["extracted_panels"] = extracted_panels
+                    quota = user_quota_fields(user_id)
+                    panels = get_images_collection().find(
+                        {"_id": {"$in": [ObjectId(pid) for pid in result_panel_ids]}, "user_id": user_id}
+                    )
+                    response["extracted_panels"] = [_convert_document_to_response(doc, quota) for doc in panels]
 
                 except Exception as e:
-                    logger.error(f"Error retrieving extracted panels: {str(e)}")
+                    logger.error("Error retrieving extracted panels: %s", str(e))
                     response["error"] = f"Retrieved panels but with errors: {str(e)}"
 
-        logger.debug(f"Panel extraction status for task {task_id}: {response['status']}")
+        logger.debug("Panel extraction status for task %s: %s", task_id, response['status'])
         return response
 
     except Exception as e:
@@ -232,12 +176,10 @@ def get_panels_by_source_image(
             "user_id": user_id
         })
 
-        result = []
-        for panel_doc in panels:
-            panel_response = _convert_document_to_response(panel_doc)
-            result.append(panel_response)
+        quota = user_quota_fields(user_id)
+        result = [_convert_document_to_response(panel_doc, quota) for panel_doc in panels]
 
-        logger.debug(f"Found {len(result)} panels for source image {source_image_id}")
+        logger.debug("Found %s panels for source image %s", len(result), source_image_id)
         return result
 
     except Exception as e:
@@ -267,11 +209,12 @@ def _normalize_task_state(state: str) -> str:
     return state_mapping.get(state, "unknown")
 
 
-def _convert_document_to_response(doc: Dict[str, Any]) -> Dict[str, Any]:
+def _convert_document_to_response(doc: Dict[str, Any], quota: Dict[str, int]) -> Dict[str, Any]:
     """Convert MongoDB document to response format.
 
     Args:
         doc: MongoDB document
+        quota: user_storage_used / user_storage_remaining of the owner
 
     Returns:
         Dictionary formatted for API response with _id field (for Pydantic alias)
@@ -289,6 +232,5 @@ def _convert_document_to_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "panel_type": doc.get("panel_type"),
         "bbox": doc.get("bbox"),
         "uploaded_date": doc.get("uploaded_date"),
-        "user_storage_used": 0,
-        "user_storage_remaining": 1073741824
+        **quota,
     }

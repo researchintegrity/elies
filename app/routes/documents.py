@@ -3,19 +3,17 @@ Document upload routes for PDF file management
 """
 import logging
 import math
-from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List
 
-from bson import ObjectId
 from celery.result import AsyncResult
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
 
 from app.celery_config import celery_app
-from app.config.settings import convert_host_path_to_container
 from app.config.storage_quota import DEFAULT_USER_STORAGE_QUOTA
 from app.db.mongodb import get_documents_collection, get_images_collection
+from app.exceptions import ResourceNotFoundError, TransientError
 from app.schemas import (
     DocumentResponse,
     ImageResponse,
@@ -26,203 +24,94 @@ from app.schemas import (
     JobType,
 )
 from app.services.document_service import delete_document_and_artifacts
-from app.services.job_logger import create_job_log
-from app.services.quota_helpers import augment_with_quota
+from app.services.job_logger import create_job_log, ensure_job_capacity, find_job_by_celery_task
+from app.services.task_submission import submit_task
+from app.services.quota_helpers import augment_list_with_quota, augment_with_quota
 from app.services.resource_helpers import get_owned_resource
+from app.services.upload_service import save_uploaded_pdf
 from app.services.watermark_removal_service import (
     get_watermark_removal_status,
     initiate_watermark_removal,
 )
 from app.tasks.image_extraction import extract_images_from_document
-from app.utils.file_storage import (
-    check_storage_quota,
-    get_extraction_output_path,
-    save_pdf_file,
-    update_user_storage_in_db,
-    validate_pdf,
-)
+from app.utils.file_storage import get_extraction_output_path
 from app.utils.docker_cbir import check_cbir_health
-from app.utils.security import get_current_user
+from app.utils.security import get_current_user, get_current_user_media
 
 logger = logging.getLogger(__name__)
-_warned_deprecated = False
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
 
 @router.post("/upload", response_model=DocumentResponse, status_code=status.HTTP_201_CREATED)
-async def upload_document(
+def upload_document(
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user)
 ):
     """
     Upload a PDF document
-    
-    - Validates PDF file
-    - Checks storage quota before saving
-    - Saves to disk organized by user
-    - Creates document record in MongoDB
-    - Sets up extraction folder
-    - Triggers figure extraction placeholder
-    
-    Args:
-        file: PDF file to upload
-        current_user: Current authenticated user
-        
-    Returns:
-        DocumentResponse with document info
-        
+
+    - Validates the extension, size, quota and that the content is a PDF
+    - Stores the file as pdfs/{_id}.pdf; the client filename is kept only
+      as display metadata
+    - Queues image extraction
+
     Raises:
+        HTTP 400: Invalid file
         HTTP 413: If storage quota would be exceeded
+        HTTP 503: CBIR or the task queue is unavailable
     """
+    # Extracted images are indexed in CBIR, so block uploads while it is down
+    cbir_healthy, cbir_message = check_cbir_health()
+    if not cbir_healthy:
+        logger.warning("CBIR service unavailable: %s", cbir_message)
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Unable to upload documents at this time. Please try again in a few minutes."
+        )
+
+    user_id_str = str(current_user["_id"])
+    user_quota = current_user.get("storage_limit_bytes", DEFAULT_USER_STORAGE_QUOTA)
+    ensure_job_capacity(user_id_str)
+
+    doc_record = save_uploaded_pdf(current_user, file.filename, file.file)
+    doc_oid = doc_record["_id"]
+    doc_id = str(doc_oid)
+
+    # Create extraction output directory
+    get_extraction_output_path(user_id_str, doc_id)
+
+    job_id = create_job_log(
+        user_id=user_id_str,
+        job_type=JobType.IMAGE_EXTRACTION,
+        title=f"Image Extraction: {doc_record['filename']}",
+        input_data={"document_id": doc_id, "filename": doc_record["filename"]}
+    )
+
+    documents_col = get_documents_collection()
     try:
-        # Pre-flight CBIR health check - block upload if CBIR is unavailable
-        # (extracted images won't be indexable)
-        cbir_healthy, cbir_message = check_cbir_health()
-        if not cbir_healthy:
-            logger.warning(f"CBIR service unavailable: {cbir_message}")
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="Unable to upload documents at this time. Please try again in a few minutes."
-            )
-        
-        # Read file content
-        content = await file.read()
-        file_size = len(content)
-        
-        # Validate PDF
-        is_valid, error_msg = validate_pdf(file.filename, file_size)
-        if not is_valid:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-        
-        # Convert user_id to string
-        user_id_str = str(current_user["_id"])
-        
-        # Check storage quota BEFORE saving file
-        user_quota = current_user.get("storage_limit_bytes", DEFAULT_USER_STORAGE_QUOTA)
-        quota_ok, quota_error = check_storage_quota(user_id_str, file_size, user_quota)
-        if not quota_ok:
-            raise HTTPException(
-                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail=quota_error
-            )
-        
-        # Save PDF file
-        try:
-            file_path, saved_size = save_pdf_file(
-                user_id_str,
-                content,
-                file.filename
-            )
-        except IOError as e:
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to save file: {str(e)}"
-            )
-        
-        # Create document record in MongoDB
-        documents_col = get_documents_collection()
-        
-        doc_data = {
-            "user_id": user_id_str,
-            "filename": file.filename,
-            "file_path": file_path,
-            "file_size": saved_size,
-            "extraction_status": "pending",
-            "extracted_image_count": 0,
-            "extraction_errors": [],
-            "uploaded_date": datetime.utcnow()
-        }
-        
-        result = documents_col.insert_one(doc_data)
-        doc_id = str(result.inserted_id)
-        
-        # Rename file to use MongoDB _id
-        new_filename = Path(f"{doc_id}.pdf")
-        
-        # Construct full paths using pathlib
-        old_path = Path(file_path)
-        if not old_path.is_absolute():
-            old_path = Path.cwd() / old_path
-        
-        new_full_path = old_path.parent / new_filename
-        
-        try:
-            old_path.rename(new_full_path)
-        except OSError as e:
-            # Delete MongoDB doc since we can't rename the file
-            documents_col.delete_one({"_id": ObjectId(doc_id)})
-            raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to rename uploaded file: {str(e)}"
-            )
-        
-        # Update MongoDB with new filename with container-compatible path
-        file_path = Path(file_path).parent / new_filename
-        storage_path = convert_host_path_to_container(file_path)
-        documents_col.update_one(
-            {"_id": ObjectId(doc_id)},
-            {
-                "$set": {
-                    "file_path": str(storage_path)
-                }
-            }
-        )
-        
-        # Create extraction output directory
-        get_extraction_output_path(user_id_str, doc_id)
-        
-        # Create job log entry for the jobs dashboard (pending state)
-        job_id = create_job_log(
-            user_id=user_id_str,
-            job_type=JobType.IMAGE_EXTRACTION,
-            title=f"Image Extraction: {new_filename}",
-            input_data={"document_id": doc_id, "filename": str(new_filename)}
-        )
-        
-        # ✨ QUEUE IMAGE EXTRACTION TASK (asynchronous - returns immediately)
-        task = extract_images_from_document.delay(
+        task = submit_task(extract_images_from_document, dict(
             doc_id=doc_id,
             user_id=user_id_str,
-            pdf_path=str(storage_path),
+            pdf_path=doc_record["file_path"],
             job_id=job_id
-        )
-        
-        # Store task_id in document for status checking
+        ), owner_id=user_id_str, job_id=job_id)
+    except TransientError:
         documents_col.update_one(
-            {"_id": ObjectId(doc_id)},
-            {"$set": {"task_id": task.id}}
+            {"_id": doc_oid},
+            {"$set": {"extraction_status": "failed", "extraction_errors": ["Task queue unavailable"]}}
         )
-        
-        # Retrieve and return updated document with quota info
-        doc_record = documents_col.find_one({"_id": ObjectId(doc_id)})
-        doc_record["_id"] = doc_id  # Ensure _id is set for response
-
-
-
-        
-        # Add quota information to response
-        doc_record = augment_with_quota(doc_record, user_id_str, user_quota)
-        
-        # Update user storage in database for easy access
-        update_user_storage_in_db(user_id_str)
-        
-        return DocumentResponse(**doc_record)
-    
-    except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Upload failed: {str(e)}"
-        )
+
+    documents_col.update_one({"_id": doc_oid}, {"$set": {"task_id": task.id}})
+    doc_record["task_id"] = task.id
+    doc_record["_id"] = doc_id
+    doc_record = augment_with_quota(doc_record, user_id_str, user_quota)
+    return DocumentResponse(**doc_record)
 
 
 @router.get("", response_model=PaginatedDocumentResponse)
-async def list_documents(
+def list_documents(
     current_user: dict = Depends(get_current_user),
     page: int = Query(1, ge=1),
     per_page: int = Query(12, ge=1, le=24)
@@ -257,12 +146,10 @@ async def list_documents(
         .limit(actual_limit)
     )
     
-    # Convert to response models with quota info
-    responses = []
+    # Convert to response models with quota info (usage read once per page)
     for doc in documents:
         doc["_id"] = str(doc["_id"])
-        doc = augment_with_quota(doc, user_id_str, user_quota)
-        responses.append(DocumentResponse(**doc))
+    responses = [DocumentResponse(**doc) for doc in augment_list_with_quota(documents, user_id_str, user_quota)]
     # Get total count for pagination
     total = documents_col.count_documents(query)
 
@@ -280,8 +167,8 @@ async def list_documents(
     )
 
 
-@router.get("/{doc_id}")
-async def get_document(
+@router.get("/{doc_id}", response_model=DocumentResponse)
+def get_document(
     doc_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -299,7 +186,7 @@ async def get_document(
     user_quota = current_user.get("storage_limit_bytes", DEFAULT_USER_STORAGE_QUOTA)
     
     # Get document with ownership validation
-    doc = await get_owned_resource(
+    doc = get_owned_resource(
         get_documents_collection,
         doc_id,
         user_id_str,
@@ -309,27 +196,15 @@ async def get_document(
     doc["_id"] = doc_id
     
     # Add quota information
-    doc = augment_with_quota(doc, user_id_str, user_quota)
-    
-    # Return raw dict (convert ObjectId and datetime for JSON serialization)
-    result = {}
-    for key, value in doc.items():
-        if isinstance(value, ObjectId):
-            result[key] = str(value)
-        elif isinstance(value, datetime):
-            result[key] = value.isoformat()
-        else:
-            result[key] = value
-    
-    return result
+    return DocumentResponse(**augment_with_quota(doc, user_id_str, user_quota))
 
 
 @router.get("/{doc_id}/images", response_model=List[ImageResponse])
-async def get_document_images(
+def get_document_images(
     doc_id: str,
     current_user: dict = Depends(get_current_user),
-    limit: int = 50,
-    offset: int = 0
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0)
 ):
     """
     Get all extracted images from a specific document
@@ -346,7 +221,7 @@ async def get_document_images(
     user_id_str = str(current_user["_id"])
     
     # Verify document belongs to user
-    await get_owned_resource(
+    get_owned_resource(
         get_documents_collection,
         doc_id,
         user_id_str,
@@ -376,9 +251,9 @@ async def get_document_images(
 
 
 @router.get("/{doc_id}/download")
-async def download_document(
+def download_document(
     doc_id: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_media)
 ):
     """
     Download a document (PDF file)
@@ -393,7 +268,7 @@ async def download_document(
     user_id_str = str(current_user["_id"])
     
     # Verify document belongs to user
-    doc = await get_owned_resource(
+    doc = get_owned_resource(
         get_documents_collection,
         doc_id,
         user_id_str,
@@ -417,7 +292,7 @@ async def download_document(
 
 
 @router.delete("/{doc_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_document(
+def delete_document(
     doc_id: str,
     current_user: dict = Depends(get_current_user)
 ) -> None:
@@ -435,7 +310,7 @@ async def delete_document(
         ResourceNotFoundError: If document not found.
         FileOperationError: If file deletion fails.
     """
-    await delete_document_and_artifacts(
+    delete_document_and_artifacts(
         document_id=doc_id,
         user_id=str(current_user["_id"])
     )
@@ -446,54 +321,38 @@ async def delete_document(
 # ============================================================================
 
 @router.get("/tasks/{task_id}", tags=["documents"])
-async def get_task_status(
+def get_task_status(
     task_id: str,
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Get status of image extraction task
-    
-    Query a background task's status. The status can be:
+    Get status of one of the current user's image extraction tasks
+
+    The status can be:
     - PENDING: Task is waiting in the queue
     - STARTED: Task has started processing
     - SUCCESS: Task completed successfully
     - FAILURE: Task failed
     - RETRY: Task is retrying after failure
     - REVOKED: Task was cancelled
-    
-    Returns:
-        {
-            "task_id": "abc-123-def",
-            "status": "SUCCESS",
-            "result": {
-                "doc_id": "507f1f77bcf86cd799439011",
-                "extracted_count": 5,
-                "errors": []
-            }
-        }
+
+    Returns 404 for tasks that belong to other users.
     """
-    try:
-        task = AsyncResult(task_id, app=celery_app)
-        
-        response = {
-            "task_id": task_id,
-            "status": task.status,
-        }
-        
-        if task.successful():
-            response["result"] = task.result
-        elif task.failed():
-            response["error"] = str(task.info)
-        elif task.status == "RETRY":
-            response["error"] = str(task.info)
-        
-        return response
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve task status: {str(e)}"
-        )
+    user_id_str = str(current_user["_id"])
+    owned = (
+        get_documents_collection().find_one({"task_id": task_id, "user_id": user_id_str}, {"_id": 1})
+        or find_job_by_celery_task(task_id, user_id_str)
+    )
+    if not owned:
+        raise ResourceNotFoundError("Task", task_id)
+
+    task = AsyncResult(task_id, app=celery_app)
+    response = {"task_id": task_id, "status": task.status}
+    if task.successful():
+        response["result"] = task.result
+    elif task.failed() or task.status == "RETRY":
+        response["error"] = str(task.info)
+    return response
 
 
 # ============================================================================
@@ -506,7 +365,7 @@ async def get_task_status(
     status_code=status.HTTP_202_ACCEPTED,
     tags=["documents"]
 )
-async def initiate_watermark_removal_endpoint(
+def initiate_watermark_removal_endpoint(
     doc_id: str,
     request: WatermarkRemovalRequest,
     current_user: dict = Depends(get_current_user)
@@ -532,50 +391,15 @@ async def initiate_watermark_removal_endpoint(
         HTTP 404: Document not found
         HTTP 500: Server error
     """
-    try:
-        user_id_str = str(current_user["_id"])
-        
-        result = await initiate_watermark_removal(
-            document_id=doc_id,
-            user_id=user_id_str,
-            aggressiveness_mode=request.aggressiveness_mode
-        )
-        
-        return result
+    user_id_str = str(current_user["_id"])
     
-    except ValueError as e:
-        error_msg = str(e)
-        if "Invalid aggressiveness mode" in error_msg:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-        elif "Invalid document ID" in error_msg:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-        elif "Document not found" in error_msg:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=error_msg
-            )
-        elif "not a PDF" in error_msg:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-    except Exception as e:
-        logger.error(f"Error initiating watermark removal: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to initiate watermark removal: {str(e)}"
-        )
+    result = initiate_watermark_removal(
+        document_id=doc_id,
+        user_id=user_id_str,
+        aggressiveness_mode=request.aggressiveness_mode
+    )
+    
+    return result
 
 
 @router.get(
@@ -583,7 +407,7 @@ async def initiate_watermark_removal_endpoint(
     response_model=WatermarkRemovalStatusResponse,
     tags=["documents"]
 )
-async def get_watermark_removal_status_endpoint(
+def get_watermark_removal_status_endpoint(
     doc_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -615,36 +439,13 @@ async def get_watermark_removal_status_endpoint(
         HTTP 404: Document not found
         HTTP 500: Server error
     """
-    try:
-        user_id_str = str(current_user["_id"])
-        
-        status_info = await get_watermark_removal_status(
-            document_id=doc_id,
-            user_id=user_id_str
-        )
-        
-        return status_info
+    user_id_str = str(current_user["_id"])
     
-    except ValueError as e:
-        error_msg = str(e)
-        if "Invalid document ID" in error_msg:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-        elif "Document not found" in error_msg:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail=error_msg
-            )
-        else:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=error_msg
-            )
-    except Exception as e:
-        logger.error(f"Error retrieving watermark removal status: {str(e)}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve watermark removal status: {str(e)}"
-        )
+    status_info = get_watermark_removal_status(
+        document_id=doc_id,
+        user_id=user_id_str
+    )
+    
+    return status_info
+
+

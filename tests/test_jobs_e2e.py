@@ -13,10 +13,6 @@ import pytest
 import requests
 import time
 import os
-import asyncio
-import threading
-from datetime import datetime, timedelta
-from unittest.mock import patch, MagicMock
 
 # Configuration
 BASE_URL = os.getenv("API_URL", "http://localhost:8000")
@@ -309,8 +305,8 @@ class TestJobsAPI:
             assert response.status_code == 200
             data = response.json()
             assert len(data["items"]) == 2
-            assert data["has_next"] == True
-            assert data["has_prev"] == False
+            assert data["has_next"] is True
+            assert data["has_prev"] is False
             
             # Get second page
             response = requests.get(
@@ -320,7 +316,7 @@ class TestJobsAPI:
             assert response.status_code == 200
             data = response.json()
             assert len(data["items"]) == 2
-            assert data["has_prev"] == True
+            assert data["has_prev"] is True
         finally:
             get_jobs_collection().delete_many({"_id": {"$in": job_ids}})
 

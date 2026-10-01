@@ -1,6 +1,6 @@
 # Database Schema (MongoDB)
 
-This system uses MongoDB for flexible, document-first storage. Collections are created on demand and indexed at startup.
+This system uses MongoDB for flexible, document-first storage. Collections are created on demand; their indexes are declared in `INDEXES` (`app/db/mongodb.py`) and created once per process when it connects (API startup, a worker's first database access).
 
 ## Connection
 - Default URL: `mongodb://localhost:27017`
@@ -11,8 +11,12 @@ This system uses MongoDB for flexible, document-first storage. Collections are c
 - `users`: Accounts, auth, and quota tracking.
 - `documents`: Uploaded PDFs and extraction state.
 - `images`: Extracted or uploaded images, panels, and analysis linkage.
-- `annotations`: User-created image annotations.
-- `analyses`: Analysis tasks/results (copy-move, CBIR, TruFor, provenance).
+- `single_annotations`, `dual_annotations`: User-created annotations on one image, or linking regions of two images.
+- `analyses`: Analysis tasks/results (copy-move, CBIR, TruFor, provenance, screening tools).
+- `image_relationships`: Undirected relationships between two images (unique per pair).
+- `jobs`: Background job log shown on the jobs dashboard (expires through a TTL index).
+- `indexing_jobs`: Progress of batch CBIR indexing.
+- `admin_audit_log`: Administrator actions.
 
 ## Field Reference
 
@@ -20,7 +24,8 @@ This system uses MongoDB for flexible, document-first storage. Collections are c
 - `_id` (ObjectId)
 - `username`, `email`, `hashed_password`, `full_name`
 - `is_active` (bool)
-- `storage_used_bytes`, `storage_limit_bytes`
+- `roles` (`user`, `admin`), `token_version` (incremented to revoke tokens), `must_change_password`
+- `storage_used_bytes` (running total of the user's workspace), `storage_limit_bytes`
 - `created_at`, `updated_at`
 
 ### `documents`
@@ -63,12 +68,12 @@ This system uses MongoDB for flexible, document-first storage. Collections are c
 - `error` (optional)
 - `created_at`, `updated_at`
 
-## Indexes (created at startup)
-- `users`: `username` (unique), `email` (unique)
-- `documents`: `user_id`, `uploaded_date`, compound (`user_id`, `uploaded_date` desc)
-- `images`: `user_id`, `document_id`, `uploaded_date`, `source_type`, compounds (`user_id`, `source_type`), (`document_id`, `source_type`)
-- `annotations`: `user_id`, `image_id`, `created_at`, compounds (`user_id`, `image_id`), (`image_id`, `created_at` desc)
-- `analyses`: `user_id`, `source_image_id`, `target_image_id`, `type`, `status`, `created_at`, compound (`user_id`, `created_at` desc)
+## Indexes
+
+Declared in `INDEXES` in `app/db/mongodb.py`. Highlights: unique `username`
+and `email` on `users`; unique (`user_id`, `image1_id`, `image2_id`) on
+`image_relationships`; a TTL index on `jobs.expires_at`; compound indexes for
+the dashboards' (`user_id`, ..., `created_at`) queries.
 
 ## Relationships
 - `documents.user_id` → `users._id`
@@ -78,7 +83,7 @@ This system uses MongoDB for flexible, document-first storage. Collections are c
 - `analyses.source_image_id` / `target_image_id` → `images._id`
 
 ## Operational Notes
-- Collections are accessed via `app/db/mongodb.py`, which ensures indexes exist.
-- All date fields use UTC (`datetime.utcnow`).
-- Storage quotas are tracked per user (`storage_used_bytes` vs `storage_limit_bytes`).
+- Collections are accessed via the getters in `app/db/mongodb.py`.
+- All dates are timezone-aware UTC (the client is created with `tz_aware=True`).
+- Storage quotas are tracked per user: uploads reserve space with a conditional `$inc` on `storage_used_bytes`, deletions release it, and a daily task reconciles it with the disk.
 - Analysis results are stored inline in `analyses.results` and summarized on related `images.analysis_status/results`.

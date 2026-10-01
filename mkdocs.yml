@@ -1,0 +1,31 @@
+# Documentation site: pip install -r requirements-docs.txt && mkdocs serve
+site_name: ELIES
+site_description: Scientific image integrity analysis system
+repo_url: https://github.com/researchintegrity/elies
+edit_uri: edit/dev/docs/
+theme:
+  name: material
+nav:
+  - Home: index.md
+  - Getting started:
+      - Development setup: development/setup.md
+      - Configuration: development/configuration.md
+      - Deployment: development/deployment.md
+      - Testing: development/testing.md
+  - Architecture:
+      - Overview: architecture/overview.md
+      - Services: architecture/services.md
+      - Database: architecture/database.md
+      - Background tasks: architecture/tasks.md
+  - API:
+      - Reference: api/reference.md
+      - Endpoints: api/endpoints.md
+      - Authentication: api/auth.md
+  - Modules:
+      - CBIR: modules/cbir.md
+      - Copy-move detection: modules/copy-move.md
+      - Panel extraction: modules/panel-extraction.md
+      - Provenance: modules/provenance.md
+      - TruFor: modules/trufor.md
+      - Watermark removal: modules/watermark.md
+  - Technical overview: TECHNICAL_OVERVIEW.md

@@ -6,58 +6,97 @@ These tasks handle background indexing and searching operations.
 from app.celery_config import celery_app
 from app.db.mongodb import (
     get_images_collection,
-    get_analyses_collection,
     get_indexing_jobs_collection,
 )
 from app.schemas import JobStatus
 from app.services.job_logger import update_job_progress as update_main_job_progress, complete_job
 from app.utils.docker_cbir import (
+    check_cbir_health,
+    check_images_indexed,
+    delete_image_from_index,
+    delete_user_data,
     index_image,
     index_images_batch,
     search_similar_images,
-    delete_image_from_index,
-    delete_user_data,
     update_image_labels,
-    check_cbir_health,
 )
 from app.config.settings import CELERY_MAX_RETRIES, INDEXING_BATCH_CHUNK_SIZE
-from app.schemas import AnalysisStatus, IndexingJobStatus
+from app.schemas import IndexingJobStatus
+from app.tasks.lifecycle import TrackedJob, run_analysis
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timezone
+from typing import List, Optional, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
 
 
-def _cleanup_batch_images(image_items: list, user_id: str) -> list:
-    """
-    Delete all images in a batch when CBIR indexing fails.
-    
-    Uses all-or-nothing policy: if ANY image fails, ALL are deleted.
-    
-    Args:
-        image_items: List of dicts with 'image_id' keys
-        user_id: User ID who owns the images
-        
-    Returns:
-        List of deleted image IDs
-    """
-    # Lazy import to avoid circular import with image_service
-    from app.services.image_service import delete_image_and_artifacts
-    
-    deleted_ids = []
-    for item in image_items:
-        image_id = item.get("image_id")
-        if not image_id:
-            continue
-        try:
-            delete_image_and_artifacts(image_id=image_id, user_id=user_id)
-            deleted_ids.append(image_id)
-            logger.info(f"Cleaned up image {image_id} after CBIR failure")
-        except Exception as cleanup_err:
-            logger.error(f"Failed to cleanup image {image_id}: {cleanup_err}")
-    return deleted_ids
+# Base delay (seconds) before retrying when CBIR is unreachable; doubles each retry
+CBIR_RETRY_BASE_DELAY = 30
 
+# Shown to users when indexing fails: the images themselves are kept
+NOT_INDEXED_MESSAGE = (
+    "{count} image(s) could not be indexed for similarity search. They are kept in "
+    "your gallery and can be re-indexed later."
+)
+
+
+def _object_ids(image_ids: List[str]) -> List[ObjectId]:
+    return [ObjectId(image_id) for image_id in image_ids if image_id and ObjectId.is_valid(image_id)]
+
+
+def _mark_indexed(image_ids: List[str]) -> None:
+    if not image_ids:
+        return
+    get_images_collection().update_many(
+        {"_id": {"$in": _object_ids(image_ids)}},
+        {"$set": {"cbir_indexed": True, "cbir_indexed_at": datetime.now(timezone.utc)},
+         "$unset": {"cbir_error": "", "cbir_failed_at": ""}},
+    )
+
+
+def _mark_index_failure(image_ids: List[str], error: str) -> None:
+    """
+    Record that images could not be indexed. The images are kept: an outage of
+    the CBIR service must never delete user data (issue #59).
+    """
+    if not image_ids:
+        return
+    get_images_collection().update_many(
+        {"_id": {"$in": _object_ids(image_ids)}},
+        {"$set": {"cbir_indexed": False, "cbir_error": error, "cbir_failed_at": datetime.now(timezone.utc)}},
+    )
+
+
+def _index_chunk(user_id: str, items: list) -> Tuple[List[str], List[str], Optional[str]]:
+    """
+    Index a chunk of images and work out which ones succeeded.
+
+    Returns (indexed_ids, failed_ids, error_message).
+    """
+    ids = [item["image_id"] for item in items]
+    cbir_items = [{"image_path": item["image_path"], "labels": item.get("labels", [])} for item in items]
+    success, message, result = index_images_batch(user_id, cbir_items)
+    if not success:
+        return [], ids, message
+    if result.get("failed_count", 0) == 0:
+        return ids, [], None
+
+    # Partial failure: ask CBIR which images made it into the index
+    checked, check_message, visibility = check_images_indexed(user_id, [item["image_path"] for item in items])
+    if not checked:
+        return [], ids, f"Some images failed to index ({check_message})"
+    indexed = [item["image_id"] for item in items if visibility.get(item["image_path"])]
+    failed = [item["image_id"] for item in items if not visibility.get(item["image_path"])]
+    return indexed, failed, "Some images failed to index"
+
+
+def _retry_while_cbir_down(task, cbir_message: str) -> None:
+    """Retry the task with exponential backoff while retries remain."""
+    if task.request.retries < task.max_retries:
+        countdown = CBIR_RETRY_BASE_DELAY * (2 ** task.request.retries)
+        logger.warning("CBIR unavailable (%s); retrying in %ss", cbir_message, countdown)
+        raise task.retry(countdown=countdown)
 
 
 @celery_app.task(bind=True, max_retries=CELERY_MAX_RETRIES, name="tasks.cbir_index_image")
@@ -66,48 +105,40 @@ def cbir_index_image(
     user_id: str,
     image_id: str,
     image_path: str,
-    labels: list = None
+    labels: list | None = None
 ):
     """
     Index a single image in the CBIR system asynchronously.
-    
-    Args:
-        user_id: User ID for multi-tenancy
-        image_id: MongoDB image ID
-        image_path: Path to the image file
-        labels: Optional list of labels
+
+    Failures are recorded on the image (cbir_indexed=False, cbir_error); the
+    image itself is never deleted.
     """
     try:
-        logger.info(f"Indexing image {image_id} for user {user_id}")
-        
+        logger.info("Indexing image %s for user %s", image_id, user_id)
         success, message, result = index_image(
             user_id=user_id,
             image_path=image_path,
             labels=labels or []
         )
-        
-        if success:
-            # Update image document with CBIR status
-            images_col = get_images_collection()
-            images_col.update_one(
-                {"_id": ObjectId(image_id)},
-                {
-                    "$set": {
-                        "cbir_indexed": True,
-                        "cbir_indexed_at": datetime.utcnow(),
-                        "cbir_id": result.get("id")
-                    }
-                }
-            )
-            logger.info(f"Image {image_id} indexed successfully")
-            return {"status": "success", "cbir_id": result.get("id")}
-        else:
-            logger.error(f"Failed to index image {image_id}: {message}")
-            return {"status": "failed", "error": message}
-            
     except Exception as e:
-        logger.error(f"Error indexing image {image_id}: {e}")
-        raise self.retry(exc=e, countdown=60)
+        logger.error("Error indexing image %s: %s", image_id, e)
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=e, countdown=CBIR_RETRY_BASE_DELAY * (2 ** self.request.retries))
+        _mark_index_failure([image_id], f"Indexing error: {e}")
+        return {"status": "failed", "error": str(e)}
+
+    if success:
+        get_images_collection().update_one(
+            {"_id": ObjectId(image_id)},
+            {"$set": {"cbir_indexed": True, "cbir_indexed_at": datetime.now(timezone.utc), "cbir_id": result.get("id")},
+             "$unset": {"cbir_error": "", "cbir_failed_at": ""}},
+        )
+        logger.info("Image %s indexed successfully", image_id)
+        return {"status": "success", "cbir_id": result.get("id")}
+
+    logger.error("Failed to index image %s: %s", image_id, message)
+    _mark_index_failure([image_id], message)
+    return {"status": "failed", "error": message}
 
 
 @celery_app.task(bind=True, max_retries=CELERY_MAX_RETRIES, name="tasks.cbir_index_batch")
@@ -118,76 +149,37 @@ def cbir_index_batch(
 ):
     """
     Index multiple images in batch asynchronously.
-    
-    Uses all-or-nothing policy: if indexing fails, all images are deleted.
-    
+
+    Used after PDF and panel extraction and by manual re-indexing. Retries with
+    backoff while CBIR is unavailable; images that still cannot be indexed are
+    marked (cbir_indexed=False, cbir_error) and kept.
+
     Args:
         user_id: User ID for multi-tenancy
         image_items: List of dicts with 'image_id', 'image_path', 'labels'
     """
+    image_ids = [item.get("image_id") for item in image_items]
+    logger.info("Batch indexing %s images for user %s", len(image_items), user_id)
+
+    cbir_healthy, cbir_message = check_cbir_health()
+    if not cbir_healthy:
+        _retry_while_cbir_down(self, cbir_message)
+        _mark_index_failure(image_ids, "Similarity search service unavailable")
+        return {"status": "failed", "error": "CBIR service unavailable", "failed_image_ids": image_ids}
+
     try:
-        logger.info(f"Batch indexing {len(image_items)} images for user {user_id}")
-        
-        # Pre-check: verify CBIR is available before processing
-        cbir_healthy, cbir_message = check_cbir_health()
-        if not cbir_healthy:
-            logger.error(f"CBIR service unavailable for batch index: {cbir_message}")
-            deleted_ids = _cleanup_batch_images(image_items, user_id)
-            return {
-                "status": "failed",
-                "error": "Unable to process images at this time.",
-                "deleted_image_ids": deleted_ids
-            }
-        
-        # Prepare items for CBIR
-        cbir_items = [
-            {"image_path": item["image_path"], "labels": item.get("labels", [])}
-            for item in image_items
-        ]
-        
-        success, message, result = index_images_batch(user_id, cbir_items)
-        
-        if success:
-            # Update image documents with CBIR status
-            images_col = get_images_collection()
-            indexed_count = result.get("indexed_count", 0)
-            
-            # Mark all as indexed (CBIR handles duplicates internally)
-            for item in image_items:
-                images_col.update_one(
-                    {"_id": ObjectId(item["image_id"])},
-                    {
-                        "$set": {
-                            "cbir_indexed": True,
-                            "cbir_indexed_at": datetime.utcnow()
-                        }
-                    }
-                )
-            
-            logger.info(f"Batch indexed {indexed_count} images for user {user_id}")
-            return {"status": "success", "indexed_count": indexed_count}
-        else:
-            # CBIR failed - delete all images in the batch
-            logger.error(f"Failed to batch index for user {user_id}: {message}")
-            deleted_ids = _cleanup_batch_images(image_items, user_id)
-            logger.warning(f"Cleaned up {len(deleted_ids)} images after CBIR failure")
-            return {
-                "status": "failed", 
-                "error": message,
-                "deleted_image_ids": deleted_ids
-            }
-            
+        indexed, failed, error = _index_chunk(user_id, image_items)
     except Exception as e:
-        logger.error(f"Error batch indexing for user {user_id}: {e}")
-        # Clean up images before retrying (they're gone so retry won't help)
-        deleted_ids = _cleanup_batch_images(image_items, user_id)
-        logger.warning(f"Cleaned up {len(deleted_ids)} images after exception")
-        # Don't retry since images are deleted
-        return {
-            "status": "failed",
-            "error": str(e),
-            "deleted_image_ids": deleted_ids
-        }
+        logger.error("Error batch indexing for user %s: %s", user_id, e)
+        if self.request.retries < self.max_retries:
+            raise self.retry(exc=e, countdown=CBIR_RETRY_BASE_DELAY * (2 ** self.request.retries))
+        indexed, failed, error = [], image_ids, f"Indexing error: {e}"
+
+    _mark_indexed(indexed)
+    _mark_index_failure(failed, error or "Indexing failed")
+    status = "success" if not failed else ("partial" if indexed else "failed")
+    logger.info("Batch indexed %s/%s images for user %s", len(indexed), len(image_items), user_id)
+    return {"status": status, "indexed_count": len(indexed), "failed_image_ids": failed}
 
 
 @celery_app.task(bind=True, max_retries=CELERY_MAX_RETRIES, name="tasks.cbir_index_batch_with_progress")
@@ -196,14 +188,15 @@ def cbir_index_batch_with_progress(
     job_id: str,
     user_id: str,
     image_items: list,
-    main_job_id: str = None
+    main_job_id: str | None = None
 ):
     """
     Index multiple images in batch with progress tracking.
-    
-    This task updates the indexing_jobs collection as it processes images,
-    allowing the frontend to poll for progress.
-    
+
+    Updates the indexing_jobs collection as chunks are processed so the
+    frontend can poll for progress. Images that cannot be indexed are kept and
+    marked; the job ends as completed, partial or failed.
+
     Args:
         job_id: Unique job ID for tracking (indexing_jobs collection)
         user_id: User ID for multi-tenancy
@@ -211,26 +204,15 @@ def cbir_index_batch_with_progress(
         main_job_id: Optional job ID for the main jobs dashboard
     """
     jobs_col = get_indexing_jobs_collection()
-    images_col = get_images_collection()
     total_images = len(image_items)
-    
-    # Terminal statuses that should not be updated
-    TERMINAL_STATUSES = [
+    terminal_statuses = [
         IndexingJobStatus.COMPLETED.value,
         IndexingJobStatus.PARTIAL.value,
         IndexingJobStatus.FAILED.value
     ]
-    
-    def update_job_progress(
-        status: str,
-        processed: int,
-        indexed: int,
-        failed: int,
-        current_step: str,
-        errors: list = None,
-        completed: bool = False
-    ):
-        """Helper to update job progress in MongoDB with conditional update"""
+
+    def update_job(status: str, processed: int, indexed: int, failed: int, current_step: str,
+                   errors: list | None = None, completed: bool = False):
         update_doc = {
             "status": status,
             "processed_images": processed,
@@ -238,214 +220,77 @@ def cbir_index_batch_with_progress(
             "failed_images": failed,
             "progress_percent": (processed / total_images * 100) if total_images > 0 else 0,
             "current_step": current_step,
-            "updated_at": datetime.utcnow(),
+            "updated_at": datetime.now(timezone.utc),
         }
         if errors:
             update_doc["errors"] = errors
         if completed:
-            update_doc["completed_at"] = datetime.utcnow()
-        
-        # Use conditional update to prevent overwriting terminal states
-        # Only update if status is not already in a terminal state
-        jobs_col.update_one(
-            {"_id": job_id, "status": {"$nin": TERMINAL_STATUSES}},
-            {"$set": update_doc}
-        )
-    
-    # Initialize progress counters before try block to ensure they're defined in except
-    processed_count = 0
-    indexed_count = 0
-    failed_count = 0
-    errors = []
-    
-    try:
-        logger.info(f"Starting batch indexing with progress for job {job_id}: {total_images} images")
-        
-        # Update main job to processing if provided
+            update_doc["completed_at"] = datetime.now(timezone.utc)
+        # Never overwrite a terminal state written by another task instance
+        jobs_col.update_one({"_id": job_id, "status": {"$nin": terminal_statuses}}, {"$set": update_doc})
+
+    existing_job = jobs_col.find_one({"_id": job_id})
+    if existing_job and existing_job.get("status") in terminal_statuses:
+        logger.warning("Job %s already in terminal state '%s', skipping", job_id, existing_job.get('status'))
+        return {"job_id": job_id, "status": existing_job.get("status")}
+
+    if main_job_id:
+        update_main_job_progress(main_job_id, user_id, JobStatus.PROCESSING, 5, "Starting batch indexing...")
+
+    image_ids = [item["image_id"] for item in image_items]
+    cbir_healthy, cbir_message = check_cbir_health()
+    if not cbir_healthy:
+        update_job(IndexingJobStatus.PENDING.value, 0, 0, 0, "Waiting for the similarity search service...")
+        _retry_while_cbir_down(self, cbir_message)
+        message = NOT_INDEXED_MESSAGE.format(count=total_images)
+        _mark_index_failure(image_ids, "Similarity search service unavailable")
+        update_job(IndexingJobStatus.FAILED.value, total_images, 0, total_images, message, errors=[message], completed=True)
         if main_job_id:
-            update_main_job_progress(main_job_id, user_id, JobStatus.PROCESSING, 5, "Starting batch indexing...")
-        
-        # Idempotency check: verify job hasn't already been completed by another task instance
-        existing_job = jobs_col.find_one({"_id": job_id})
-        if existing_job and existing_job.get("status") in TERMINAL_STATUSES:
-            logger.warning(f"Job {job_id} already in terminal state '{existing_job.get('status')}', skipping")
-            return {
-                "job_id": job_id,
-                "status": existing_job.get("status"),
-                "message": "Job already completed by another task instance"
-            }
-        
-        # Update status to processing
-        update_job_progress(
-            status=IndexingJobStatus.PROCESSING.value,
-            processed=0,
-            indexed=0,
-            failed=0,
-            current_step="Checking service availability..."
+            complete_job(main_job_id, user_id, JobStatus.FAILED, errors=[message])
+        return {"status": IndexingJobStatus.FAILED.value, "indexed_count": 0, "failed_count": total_images}
+
+    indexed_ids: List[str] = []
+    failed_ids: List[str] = []
+    for start in range(0, total_images, INDEXING_BATCH_CHUNK_SIZE):
+        chunk = image_items[start:start + INDEXING_BATCH_CHUNK_SIZE]
+        update_job(
+            IndexingJobStatus.PROCESSING.value, start, len(indexed_ids), len(failed_ids),
+            f"Encoding images {start + 1} to {start + len(chunk)} of {total_images}",
         )
-        
-        # Pre-check: verify CBIR is available before processing
-        cbir_healthy, cbir_message = check_cbir_health()
-        if not cbir_healthy:
-            logger.error(f"CBIR service unavailable for job {job_id}: {cbir_message}")
-            deleted_ids = _cleanup_batch_images(image_items, user_id)
-            if main_job_id:
-                complete_job(main_job_id, user_id, JobStatus.FAILED, errors=["CBIR service unavailable"])
-            update_job_progress(
-                status=IndexingJobStatus.FAILED.value,
-                processed=total_images,
-                indexed=0,
-                failed=total_images,
-                current_step="Upload failed - images have been removed.",
-                errors=["Unable to process images at this time. Please try again later."],
-                completed=True
-            )
-            return {
-                "status": IndexingJobStatus.FAILED.value,
-                "indexed_count": 0,
-                "failed_count": total_images,
-                "deleted_image_ids": deleted_ids
-            }
-        
-        # Process in chunks for better progress granularity
-        
-        for i in range(0, total_images, INDEXING_BATCH_CHUNK_SIZE):
-            chunk = image_items[i:i + INDEXING_BATCH_CHUNK_SIZE]
-            chunk_size = len(chunk)
-            
-            # Update progress before processing chunk
-            update_job_progress(
-                status=IndexingJobStatus.PROCESSING.value,
-                processed=processed_count,
-                indexed=indexed_count,
-                failed=failed_count,
-                current_step=f"Encoding images {i + 1} to {min(i + chunk_size, total_images)} of {total_images}",
-                errors=errors
-            )
-            
-            # Prepare CBIR items for this chunk
-            cbir_items = [
-                {"image_path": item["image_path"], "labels": item.get("labels", [])}
-                for item in chunk
-            ]
-            
-            # Index the chunk
-            success, message, result = index_images_batch(user_id, cbir_items)
-            
-            if success:
-                chunk_indexed = result.get("indexed_count", 0)
-                chunk_failed = result.get("failed_count", 0)
-                
-                indexed_count += chunk_indexed
-                failed_count += chunk_failed
-                
-                # Only mark images as indexed when the entire chunk succeeded
-                # The CBIR service doesn't return per-image status, so we can't
-                # determine which specific images failed within a partial chunk
-                if chunk_failed == 0:
-                    for item in chunk:
-                        images_col.update_one(
-                            {"_id": ObjectId(item["image_id"])},
-                            {
-                                "$set": {
-                                    "cbir_indexed": True,
-                                    "cbir_indexed_at": datetime.utcnow()
-                                }
-                            }
-                        )
-                else:
-                    # Partial chunk failure - ALL-OR-NOTHING: clean up entire batch
-                    logger.warning(
-                        f"Chunk had partial failures: {chunk_indexed} indexed, {chunk_failed} failed. "
-                        f"All-or-nothing policy: deleting all images in batch."
-                    )
-                    errors.append(
-                        "Some images could not be processed. All images have been removed."
-                    )
-                    # Break out and go to cleanup
-                    failed_count = total_images
-                    break
-            else:
-                # Entire chunk failed - ALL-OR-NOTHING: clean up entire batch
-                failed_count = total_images
-                errors.append("Upload could not be completed. All images have been removed.")
-                logger.error(f"Chunk indexing failed for job {job_id}: {message}")
-                # Break out and go to cleanup
-                break
-            
-            processed_count += chunk_size
-        
-        # Determine final status and handle cleanup
-        if failed_count == 0:
-            final_status = IndexingJobStatus.COMPLETED.value
-            final_step = f"Successfully indexed {indexed_count} images"
-            deleted_ids = []
-            # Update main job as completed
-            if main_job_id:
-                complete_job(
-                    main_job_id, user_id, JobStatus.COMPLETED,
-                    output_data={"indexed_count": indexed_count, "image_count": total_images}
-                )
-        else:
-            # ALL-OR-NOTHING: Any failure means delete ALL images
-            final_status = IndexingJobStatus.FAILED.value
-            deleted_ids = _cleanup_batch_images(image_items, user_id)
-            errors.append("Upload failed. Please try again when the service is available.")
-            final_step = "Upload failed - images have been removed."
-            logger.warning(f"Job {job_id}: Cleaned up {len(deleted_ids)} images after failure")
-            # Update main job as failed
-            if main_job_id:
-                complete_job(main_job_id, user_id, JobStatus.FAILED, errors=errors)
-        
-        # Final update
-        update_job_progress(
-            status=final_status,
-            processed=total_images,
-            indexed=indexed_count if failed_count == 0 else 0,
-            failed=failed_count,
-            current_step=final_step,
-            errors=errors,
-            completed=True
+        try:
+            indexed, failed, error = _index_chunk(user_id, chunk)
+        except Exception as e:
+            logger.error("Chunk indexing error for job %s: %s", job_id, e)
+            indexed, failed, error = [], [item["image_id"] for item in chunk], f"Indexing error: {e}"
+        _mark_indexed(indexed)
+        _mark_index_failure(failed, error or "Indexing failed")
+        indexed_ids += indexed
+        failed_ids += failed
+
+    if not failed_ids:
+        final_status, final_step, errors = IndexingJobStatus.COMPLETED.value, f"Successfully indexed {len(indexed_ids)} images", []
+        main_status = JobStatus.COMPLETED
+    else:
+        final_status = IndexingJobStatus.PARTIAL.value if indexed_ids else IndexingJobStatus.FAILED.value
+        final_step = NOT_INDEXED_MESSAGE.format(count=len(failed_ids))
+        errors = [final_step]
+        main_status = JobStatus.PARTIAL if indexed_ids else JobStatus.FAILED
+
+    update_job(final_status, total_images, len(indexed_ids), len(failed_ids), final_step, errors=errors, completed=True)
+    if main_job_id:
+        complete_job(
+            main_job_id, user_id, main_status,
+            output_data={"indexed_count": len(indexed_ids), "image_count": total_images},
+            errors=errors or None,
         )
-        
-        logger.info(f"Job {job_id} completed: {final_step}")
-        return {
-            "status": final_status,
-            "indexed_count": indexed_count if failed_count == 0 else 0,
-            "failed_count": failed_count,
-            "deleted_image_ids": deleted_ids
-        }
-        
-    except Exception as e:
-        logger.error(f"Error in batch indexing job {job_id}: {e}")
-        
-        # Update main job as failed
-        if main_job_id:
-            complete_job(main_job_id, user_id, JobStatus.FAILED, errors=[str(e)])
-        
-        # ALL-OR-NOTHING: Clean up all images on exception
-        deleted_ids = _cleanup_batch_images(image_items, user_id)
-        logger.warning(f"Job {job_id}: Cleaned up {len(deleted_ids)} images after exception")
-        
-        # Update job as failed with cleanup info
-        update_job_progress(
-            status=IndexingJobStatus.FAILED.value,
-            processed=total_images,
-            indexed=0,
-            failed=total_images,
-            current_step="Upload failed - images have been removed.",
-            errors=["An unexpected error occurred. Please try again."],
-            completed=True
-        )
-        
-        # Don't retry - images are already deleted
-        return {
-            "status": IndexingJobStatus.FAILED.value,
-            "indexed_count": 0,
-            "failed_count": total_images,
-            "deleted_image_ids": deleted_ids,
-            "error": str(e)
-        }
+
+    logger.info("Job %s finished: %s", job_id, final_step)
+    return {
+        "status": final_status,
+        "indexed_count": len(indexed_ids),
+        "failed_count": len(failed_ids),
+        "failed_image_ids": failed_ids,
+    }
 
 
 @celery_app.task(bind=True, max_retries=CELERY_MAX_RETRIES, name="tasks.cbir_search")
@@ -456,7 +301,7 @@ def cbir_search(
     query_image_id: str,
     query_image_path: str,
     top_k: int = 10,
-    labels: list = None
+    labels: list | None = None
 ):
     """
     Search for similar images asynchronously.
@@ -469,81 +314,28 @@ def cbir_search(
         top_k: Number of results
         labels: Optional filter labels
     """
-    analyses_col = get_analyses_collection()
-    
-    try:
-        # Update status to processing
-        analyses_col.update_one(
-            {"_id": ObjectId(analysis_id)},
-            {
-                "$set": {
-                    "status": AnalysisStatus.PROCESSING,
-                    "status_message": "Searching for similar images...",
-                    "updated_at": datetime.utcnow()
-                }
-            }
-        )
-        
-        logger.info(f"Searching similar images for analysis {analysis_id}")
-        
+    job = TrackedJob(user_id, None, analysis_id)
+
+    def work():
         success, message, results = search_similar_images(
             user_id=user_id,
             image_path=query_image_path,
             top_k=top_k,
             labels=labels
         )
-        
-        if success:
-            # Enrich results with image IDs from our database
-            enriched_results = _enrich_search_results(user_id, results)
-            
-            analyses_col.update_one(
-                {"_id": ObjectId(analysis_id)},
-                {
-                    "$set": {
-                        "status": AnalysisStatus.COMPLETED,
-                        "status_message": "Completed",
-                        "results": {
-                            "timestamp": datetime.utcnow(),
-                            "query_image_id": query_image_id,
-                            "top_k": top_k,
-                            "labels_filter": labels,
-                            "matches_count": len(enriched_results),
-                            "matches": enriched_results
-                        },
-                        "updated_at": datetime.utcnow()
-                    }
-                }
-            )
-            logger.info(f"CBIR search completed for analysis {analysis_id}, found {len(enriched_results)} matches")
-            return {"status": "completed", "matches_count": len(enriched_results)}
-        else:
-            analyses_col.update_one(
-                {"_id": ObjectId(analysis_id)},
-                {
-                    "$set": {
-                        "status": AnalysisStatus.FAILED,
-                        "error": message,
-                        "updated_at": datetime.utcnow()
-                    }
-                }
-            )
-            logger.error(f"CBIR search failed for analysis {analysis_id}: {message}")
-            return {"status": "failed", "error": message}
-            
-    except Exception as e:
-        logger.error(f"Error in CBIR search for analysis {analysis_id}: {e}")
-        analyses_col.update_one(
-            {"_id": ObjectId(analysis_id)},
-            {
-                "$set": {
-                    "status": AnalysisStatus.FAILED,
-                    "error": str(e),
-                    "updated_at": datetime.utcnow()
-                }
-            }
-        )
-        raise self.retry(exc=e, countdown=60)
+        if not success:
+            return False, message, None
+        enriched_results = _enrich_search_results(user_id, results)
+        return True, message, {
+            "timestamp": datetime.now(timezone.utc),
+            "query_image_id": query_image_id,
+            "top_k": top_k,
+            "labels_filter": labels,
+            "matches_count": len(enriched_results),
+            "matches": enriched_results
+        }
+
+    return run_analysis(self, job, "Searching for similar images...", work)
 
 
 @celery_app.task(bind=True, max_retries=CELERY_MAX_RETRIES, name="tasks.cbir_delete_image")
@@ -562,7 +354,7 @@ def cbir_delete_image(
         image_path: Path to the image
     """
     try:
-        logger.info(f"Deleting image {image_id} from CBIR index")
+        logger.info("Deleting image %s from CBIR index", image_id)
         
         success, message = delete_image_from_index(user_id, image_path)
         
@@ -581,14 +373,14 @@ def cbir_delete_image(
                     }
                 }
             )
-            logger.info(f"Image {image_id} removed from CBIR index")
+            logger.info("Image %s removed from CBIR index", image_id)
             return {"status": "success"}
         else:
-            logger.error(f"Failed to delete image {image_id} from CBIR: {message}")
+            logger.error("Failed to delete image %s from CBIR: %s", image_id, message)
             return {"status": "failed", "error": message}
             
     except Exception as e:
-        logger.error(f"Error deleting image {image_id} from CBIR: {e}")
+        logger.error("Error deleting image %s from CBIR: %s", image_id, e)
         raise self.retry(exc=e, countdown=60)
 
 
@@ -613,19 +405,19 @@ def cbir_update_labels(
         labels: New labels list
     """
     try:
-        logger.info(f"Updating CBIR labels for image {image_id}: {labels}")
+        logger.info("Updating CBIR labels for image %s: %s", image_id, labels)
         
         success, message = update_image_labels(user_id, image_path, labels)
         
         if success:
-            logger.info(f"CBIR labels updated for image {image_id}")
+            logger.info("CBIR labels updated for image %s", image_id)
             return {"status": "success", "labels": labels}
         else:
-            logger.warning(f"CBIR label update for image {image_id}: {message}")
+            logger.warning("CBIR label update for image %s: %s", image_id, message)
             return {"status": "skipped", "message": message}
             
     except Exception as e:
-        logger.error(f"Error updating CBIR labels for image {image_id}: {e}")
+        logger.error("Error updating CBIR labels for image %s: %s", image_id, e)
         raise self.retry(exc=e, countdown=60)
 
 
@@ -638,7 +430,7 @@ def cbir_delete_user_data(self, user_id: str):
         user_id: User ID whose data to delete
     """
     try:
-        logger.info(f"Deleting all CBIR data for user {user_id}")
+        logger.info("Deleting all CBIR data for user %s", user_id)
         
         success, message = delete_user_data(user_id)
         
@@ -652,14 +444,14 @@ def cbir_delete_user_data(self, user_id: str):
                     "$unset": {"cbir_indexed_at": ""}
                 }
             )
-            logger.info(f"All CBIR data deleted for user {user_id}")
+            logger.info("All CBIR data deleted for user %s", user_id)
             return {"status": "success"}
         else:
-            logger.error(f"Failed to delete CBIR data for user {user_id}: {message}")
+            logger.error("Failed to delete CBIR data for user %s: %s", user_id, message)
             return {"status": "failed", "error": message}
             
     except Exception as e:
-        logger.error(f"Error deleting CBIR data for user {user_id}: {e}")
+        logger.error("Error deleting CBIR data for user %s: %s", user_id, e)
         raise self.retry(exc=e, countdown=60)
 
 

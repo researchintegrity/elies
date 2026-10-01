@@ -2,13 +2,20 @@
 ELIES Scientific Image Analysis System
 """
 import logging
+from contextlib import asynccontextmanager
 
+from bson.errors import InvalidId
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app import __version__
+from app.config.settings import ALLOWED_ORIGINS, LOG_FORMAT, LOG_LEVEL
 from app.db.mongodb import db_connection
 from app.exceptions import ELIESException
+from app.logging_config import configure_logging
+from app.request_context import REQUEST_ID_HEADER, RequestIdMiddleware
+from app.utils.security import RedactTokenFilter
 from app.routes import (
     admin,
     analyses,
@@ -25,35 +32,76 @@ from app.routes import (
     users,
 )
 
+configure_logging(LOG_LEVEL, LOG_FORMAT)
 logger = logging.getLogger(__name__)
+
+# Media URLs carry ?token=...; keep bearer tokens out of the access log
+logging.getLogger("uvicorn.access").addFilter(RedactTokenFilter())
+
+
+class UnhandledErrorMiddleware:
+    """Log unexpected errors in full, but never return internals to the client."""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        response_started = False
+
+        async def send_tracking_start(message):
+            nonlocal response_started
+            if message["type"] == "http.response.start":
+                response_started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, send_tracking_start)
+        except Exception:
+            logger.exception("Unhandled error on %s %s", scope.get("method"), scope.get("path"))
+            if response_started:  # e.g. a streaming response failed midway
+                raise
+            await JSONResponse(status_code=500, content={"detail": "Internal server error"})(scope, receive, send)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Connect to MongoDB (creating indexes) before serving; fail fast if it is down."""
+    db_connection.connect()
+    yield
+    db_connection.disconnect()
+
 
 # Create FastAPI app
 app = FastAPI(
     title="ELIES Scientific Image Analysis System",
-    description="A backed-end service for Image Analysis",
-    version="1.0.0",
+    description="Back-end API for scientific image integrity analysis",
+    version=__version__,
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
-# Add CORS middleware -- During production, restrict origins appropriately
+# Innermost: unexpected errors become a JSON 500 here, inside the CORS and
+# request-ID middleware, so the response keeps their headers and the log line
+# its request ID (Starlette's own handler for Exception runs outside them).
+app.add_middleware(UnhandledErrorMiddleware)
+
+# CORS: only the configured frontend origins (ALLOWED_ORIGINS). The frontend
+# authenticates with a bearer header, so credentialed CORS is not needed.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",  # Vite dev server
-        "http://localhost:3000",  # Alternative dev server
-        "http://localhost:8000",  # API itself
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:8000",
-        "*"  # Allow all origins (for development)
-    ],
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
+    expose_headers=["Content-Disposition", REQUEST_ID_HEADER],
     max_age=600,
 )
+# Outermost: every response, including CORS and error responses, gets X-Request-ID
+app.add_middleware(RequestIdMiddleware)
 
 # Include routers
 app.include_router(auth.router)
@@ -79,10 +127,9 @@ app.include_router(api.router)
 async def elies_exception_handler(request: Request, exc: ELIESException) -> JSONResponse:
     """
     Handle custom ELIES exceptions and convert to JSON responses.
-    
-    This allows services to raise domain exceptions (ValidationError,
-    ResourceNotFoundError, etc.) which are automatically converted
-    to appropriate HTTP responses.
+
+    Services raise domain exceptions (ValidationError, ResourceNotFoundError,
+    etc.) which are converted to the matching HTTP status here.
     """
     logger.warning(
         "ELIES exception: %s (status=%d, path=%s)",
@@ -96,37 +143,25 @@ async def elies_exception_handler(request: Request, exc: ELIESException) -> JSON
     )
 
 
-# ============================================================================
-# LIFECYCLE EVENTS
-# ============================================================================
-@app.on_event("startup")
-async def startup_event() -> None:
-    """Initialize database connection on startup."""
-    try:
-        db_connection.connect()
-    except Exception as e:
-        logger.error("Failed to connect to MongoDB: %s", str(e))
-
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Close database connection on shutdown"""
-    db_connection.disconnect()
+@app.exception_handler(InvalidId)
+async def invalid_id_handler(request: Request, exc: InvalidId) -> JSONResponse:
+    """A malformed ObjectId in a path, query or body is a client error."""
+    return JSONResponse(status_code=400, content={"detail": "Invalid ID format"})
 
 
 # ============================================================================
 # ROOT & HEALTH ENDPOINTS
 # ============================================================================
 @app.get("/", tags=["General"])
-async def root() -> dict:
+def root() -> dict:
     """
     Root endpoint - API information
     
     Provides information about available endpoints and API version
     """
     return {
-        "message": "Welcome to ELIES User Management System",
-        "version": "1.0.0",
+        "message": "Welcome to the ELIES Scientific Image Analysis API",
+        "version": __version__,
         "documentation": {
             "swagger": "/docs",
             "redoc": "/redoc"
@@ -140,31 +175,42 @@ async def root() -> dict:
     }
 
 
-@app.get("/health", tags=["General"])
-async def health_check() -> dict:
-    """
-    Health check endpoint
-    
-    Verifies MongoDB connection and API status
-    """
+def _database_ready() -> bool:
     try:
-        db = db_connection.get_database()
-        db.client.admin.command('ping')
-        
-        return {
-            "status": "healthy",
-            "database": "connected",
-            "version": "0.0.1"
-        }
+        db_connection.get_database().client.admin.command("ping")
+        return True
     except Exception as e:
-        return {
-            "status": "unhealthy",
-            "database": "disconnected",
-            "error": str(e),
-            "version": "0.0.1"
-        }
+        logger.warning("Readiness: MongoDB unavailable: %s", e)
+        return False
 
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+def _redis_ready() -> bool:
+    from app.utils.redis_client import ping
+
+    return ping()
+
+
+@app.get("/health/live", tags=["General"])
+def liveness() -> dict:
+    """Liveness: the process is up and serving requests (no dependency checks)."""
+    return {"status": "alive", "version": __version__}
+
+
+@app.get("/health/ready", tags=["General"])
+@app.get("/health", tags=["General"])
+def readiness() -> JSONResponse:
+    """
+    Readiness: MongoDB and Redis (task queue, job events) are reachable.
+
+    Answers 503 when one of them is down, so container healthchecks and load
+    balancers notice. Failure details go to the log, not to the client.
+    """
+    checks = {
+        "database": "connected" if _database_ready() else "disconnected",
+        "redis": "connected" if _redis_ready() else "disconnected",
+    }
+    healthy = all(value == "connected" for value in checks.values())
+    return JSONResponse(
+        status_code=200 if healthy else 503,
+        content={"status": "healthy" if healthy else "unhealthy", **checks, "version": __version__},
+    )

@@ -1,40 +1,31 @@
-# 2025 ELIES System Requirements
-# Core Web Framework
+# ELIES runtime requirements (API and Celery workers).
+# Test and lint tools are in requirements-dev.txt, documentation tools in
+# requirements-docs.txt: none of them are installed in the runtime images.
+
+# Web framework
 fastapi[standard]==0.121.1
 uvicorn[standard]==0.38.0
 python-multipart==0.0.20
-requests==2.31.0
+requests==2.32.5
 
 # Database
 pymongo==4.7.0
 
-# Authentication & Security
+# Authentication
 PyJWT==2.10.1
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-bcrypt==4.0.1
+bcrypt==4.3.0
 
-# Data Validation
-pydantic==2.12.4
+# Data validation
 pydantic[email]==2.12.4
 email-validator==2.3.0
 
-# Environment & Configuration
+# Configuration
 python-dotenv==1.2.1
 
-# Image Metadata Extraction
+# Images and metadata
 PyExifTool==0.5.6
-Pillow>=10.0.0
+Pillow==12.3.0
 
-# Job Queuing
+# Job queue
 celery==5.5.3
 redis==7.0.1
-
-# Development (optional)
-pytest==8.2
-pytest-asyncio==0.24.0
-httpx==0.28.1
-
-# Documentation
-mkdocs==1.6.1
-mkdocs-material==9.5.49
