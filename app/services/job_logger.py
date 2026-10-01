@@ -23,6 +23,7 @@ import redis
 from app.config.settings import JOB_EVENTS_REDIS_URL, JOB_RETENTION_DAYS, MAX_ACTIVE_JOBS_PER_USER
 from app.db.mongodb import get_jobs_collection
 from app.exceptions import TooManyJobsError
+from app.request_context import current_request_id
 from app.schemas import JobStatus, JobType
 
 logger = logging.getLogger(__name__)
@@ -186,6 +187,8 @@ def create_job_log(
         "updated_at": now,
         "started_at": None,
         "completed_at": None,
+        # Correlates the job with the API request that started it (issue #77)
+        "request_id": current_request_id(),
         # Reset on completion; set now so jobs abandoned by a dead worker expire too
         "expires_at": now + timedelta(days=JOB_RETENTION_DAYS)
     }

@@ -10,10 +10,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app import __version__
-from app.config.settings import ALLOWED_ORIGINS, LOG_LEVEL
+from app.config.settings import ALLOWED_ORIGINS, LOG_FORMAT, LOG_LEVEL
 from app.db.mongodb import db_connection
 from app.exceptions import ELIESException
 from app.logging_config import configure_logging
+from app.request_context import REQUEST_ID_HEADER, RequestIdMiddleware
 from app.utils.security import RedactTokenFilter
 from app.routes import (
     admin,
@@ -31,7 +32,7 @@ from app.routes import (
     users,
 )
 
-configure_logging(LOG_LEVEL)
+configure_logging(LOG_LEVEL, LOG_FORMAT)
 logger = logging.getLogger(__name__)
 
 # Media URLs carry ?token=...; keep bearer tokens out of the access log
@@ -64,9 +65,11 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["Content-Disposition"],
+    expose_headers=["Content-Disposition", REQUEST_ID_HEADER],
     max_age=600,
 )
+# Outermost: every response, including CORS and error responses, gets X-Request-ID
+app.add_middleware(RequestIdMiddleware)
 
 # Include routers
 app.include_router(auth.router)
@@ -147,31 +150,47 @@ def root() -> dict:
     }
 
 
-@app.get("/health", tags=["General"])
-def health_check() -> dict:
-    """
-    Health check endpoint
-    
-    Verifies MongoDB connection and API status
-    """
+def _database_ready() -> bool:
     try:
-        db = db_connection.get_database()
-        db.client.admin.command('ping')
-        
-        return {
-            "status": "healthy",
-            "database": "connected",
-            "version": __version__
-        }
+        db_connection.get_database().client.admin.command("ping")
+        return True
     except Exception as e:
-        return {
-            "status": "unhealthy",
-            "database": "disconnected",
-            "error": str(e),
-            "version": __version__
-        }
+        logger.warning("Readiness: MongoDB unavailable: %s", e)
+        return False
 
 
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+def _redis_ready() -> bool:
+    from app.services.job_logger import _get_redis
+
+    try:
+        client = _get_redis()
+        return bool(client and client.ping())
+    except Exception as e:
+        logger.warning("Readiness: Redis unavailable: %s", e)
+        return False
+
+
+@app.get("/health/live", tags=["General"])
+def liveness() -> dict:
+    """Liveness: the process is up and serving requests (no dependency checks)."""
+    return {"status": "alive", "version": __version__}
+
+
+@app.get("/health/ready", tags=["General"])
+@app.get("/health", tags=["General"])
+def readiness() -> JSONResponse:
+    """
+    Readiness: MongoDB and Redis (task queue, job events) are reachable.
+
+    Answers 503 when one of them is down, so container healthchecks and load
+    balancers notice. Failure details go to the log, not to the client.
+    """
+    checks = {
+        "database": "connected" if _database_ready() else "disconnected",
+        "redis": "connected" if _redis_ready() else "disconnected",
+    }
+    healthy = all(value == "connected" for value in checks.values())
+    return JSONResponse(
+        status_code=200 if healthy else 503,
+        content={"status": "healthy" if healthy else "unhealthy", **checks, "version": __version__},
+    )

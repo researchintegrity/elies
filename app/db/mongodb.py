@@ -100,6 +100,10 @@ INDEXES: Dict[str, List[IndexSpec]] = {
         ("created_at", {}),
         ([("user_id", ASCENDING), ("created_at", DESCENDING)], {}),
     ],
+    "admin_audit_log": [
+        ([("created_at", DESCENDING)], {}),
+        ([("target_user_id", ASCENDING), ("created_at", DESCENDING)], {}),
+    ],
     "jobs": [
         ("user_id", {}),
         ("job_type", {}),
@@ -232,6 +236,11 @@ def get_indexing_jobs_collection():
 def get_jobs_collection():
     """Unified background job tracking (expires through a TTL index)"""
     return db_connection.get_collection("jobs")
+
+
+def get_admin_audit_log_collection():
+    """Audit trail of administrator actions"""
+    return db_connection.get_collection("admin_audit_log")
 
 
 def get_database():

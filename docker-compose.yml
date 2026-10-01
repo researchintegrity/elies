@@ -26,6 +26,13 @@ services:
     volumes:
       - ${HOST_WORKSPACE_PATH}:${CONTAINER_WORKSPACE_PATH}
     command: uvicorn app.main:app --host 0.0.0.0 --port ${API_PORT:-8000} --reload
+    healthcheck:
+      # Readiness: answers 503 while MongoDB or Redis is unreachable
+      test: ["CMD", "python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/health/ready' % os.getenv('API_PORT', '8000'), timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
     networks:
       - elies_network
       - milvus # Connect to CBIR/Milvus network for inter-service communication

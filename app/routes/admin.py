@@ -32,7 +32,8 @@ from app.utils.security import (
     generate_secure_password,
     revoke_user_tokens,
 )
-from app.db.mongodb import get_users_collection
+from app.db.mongodb import get_admin_audit_log_collection, get_users_collection
+from app.services.audit_log import record_admin_action
 from app.services.deletion_service import request_account_deletion
 
 logger = logging.getLogger(__name__)
@@ -210,6 +211,7 @@ def update_user_quota(
     logger.info(
         "Admin %s updated quota for user %s: %s -> %s bytes", current_admin['username'], user['username'], old_quota, new_quota
     )
+    record_admin_action(current_admin, "update_quota", user, {"old": old_quota, "new": new_quota})
     
     return AdminUserResponse(**result).model_dump(by_alias=True)
 
@@ -278,6 +280,7 @@ def update_user_role(
     logger.info(
         "Admin %s updated roles for user %s: %s -> %s", current_admin['username'], target_user['username'], old_roles, role_update.roles
     )
+    record_admin_action(current_admin, "update_roles", target_user, {"old": old_roles, "new": role_update.roles})
     
     return AdminUserResponse(**result).model_dump(by_alias=True)
 
@@ -357,6 +360,7 @@ def reset_user_password(
     logger.info(
         "Admin %s reset password for user %s (generated: %s)", current_admin['username'], target_user['username'], generated
     )
+    record_admin_action(current_admin, "reset_password", target_user, {"generated": generated})
     
     response = {
         "message": f"Password reset successfully for user {target_user['username']}"
@@ -434,6 +438,7 @@ def update_user_status(
     
     action = "activated" if status_update.is_active else "deactivated"
     logger.info("Admin %s %s user %s", current_admin['username'], action, target_user['username'])
+    record_admin_action(current_admin, action, target_user, {"is_active": status_update.is_active})
     
     return AdminUserResponse(**result).model_dump(by_alias=True)
 
@@ -467,12 +472,32 @@ def delete_user(
 
     request_account_deletion(user_id)
     logger.info("Admin %s deleted user %s", current_admin['username'], target_user['username'])
+    record_admin_action(current_admin, "delete_user", target_user)
     return {"message": f"User {target_user['username']} is being deleted"}
 
 
 # ============================================================================
 # ADMIN STATISTICS
 # ============================================================================
+
+@router.get("/audit-log")
+def list_audit_log(
+    current_admin: dict = Depends(get_current_admin_user),
+    target_user_id: Optional[str] = Query(None, description="Only actions on this user"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
+) -> dict:
+    """
+    Administrator actions, newest first (quota, role, password, status and
+    account deletion changes). Requires admin privileges.
+    """
+    query = {"target_user_id": target_user_id} if target_user_id else {}
+    collection = get_admin_audit_log_collection()
+    entries = list(collection.find(query).sort("created_at", -1).skip((page - 1) * per_page).limit(per_page))
+    for entry in entries:
+        entry["_id"] = str(entry["_id"])
+    return {"items": entries, "total": collection.count_documents(query), "page": page, "per_page": per_page}
+
 
 @router.get("/stats")
 def get_admin_stats(

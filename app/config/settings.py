@@ -72,6 +72,7 @@ UPLOAD_DIR = CONTAINER_WORKSPACE_PATH
 # ============================================================================
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+LOG_FORMAT = os.getenv("LOG_FORMAT", "text").lower()  # "text" or "json"
 
 # Browser origins allowed to call the API (comma-separated)
 ALLOWED_ORIGINS = _env_list(

@@ -2,7 +2,14 @@
 Celery configuration for async task processing
 """
 from celery import Celery
-from celery.signals import worker_process_init, worker_ready
+from celery.signals import (
+    before_task_publish,
+    setup_logging,
+    task_postrun,
+    task_prerun,
+    worker_process_init,
+    worker_ready,
+)
 from app.config.settings import (
     CELERY_BROKER_URL,
     CELERY_RESULT_BACKEND,
@@ -88,3 +95,39 @@ def reset_database_connection(**kwargs):
     from app.db.mongodb import db_connection
 
     db_connection.reset()
+
+
+@setup_logging.connect
+def configure_worker_logging(**kwargs):
+    """Workers log like the API (LOG_LEVEL, LOG_FORMAT, request IDs) instead of Celery's default setup."""
+    from app.config.settings import LOG_FORMAT, LOG_LEVEL
+    from app.logging_config import configure_logging
+
+    configure_logging(LOG_LEVEL, LOG_FORMAT)
+
+
+@before_task_publish.connect
+def propagate_request_id(headers=None, **kwargs):
+    """Tasks queued while handling an API request carry its request ID."""
+    from app.request_context import current_request_id
+
+    request_id = current_request_id()
+    if request_id and headers is not None:
+        headers.setdefault("request_id", request_id)
+
+
+@task_prerun.connect
+def bind_request_id(task=None, **kwargs):
+    """Log records of a task carry the request ID of the API request that queued it."""
+    from app.request_context import request_id_var
+
+    request = getattr(task, "request", None)
+    request_id = getattr(request, "request_id", None) or (getattr(request, "headers", None) or {}).get("request_id")
+    request_id_var.set(request_id)
+
+
+@task_postrun.connect
+def unbind_request_id(**kwargs):
+    from app.request_context import request_id_var
+
+    request_id_var.set(None)
