@@ -8,6 +8,9 @@ from PIL import Image
 from app.utils.docker_trufor import run_trufor_detection_with_docker
 from app.schemas import AnalysisType
 
+# Needs a Docker daemon and the built tool images (docker compose --profile tools build)
+pytestmark = pytest.mark.e2e
+
 # Create a large dummy image for testing
 @pytest.fixture
 def large_image():

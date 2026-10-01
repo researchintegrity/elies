@@ -2,6 +2,7 @@
 Celery configuration for async task processing
 """
 from celery import Celery
+from celery.signals import worker_ready
 from app.config.settings import (
     CELERY_BROKER_URL,
     CELERY_RESULT_BACKEND,
@@ -62,3 +63,11 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     worker_max_tasks_per_child=1000,
 )
+
+
+@worker_ready.connect
+def kill_orphaned_tool_containers(**kwargs):
+    """Kill tool containers this worker left running before a crash or restart."""
+    from app.utils.docker_runner import kill_orphaned_containers
+
+    kill_orphaned_containers()

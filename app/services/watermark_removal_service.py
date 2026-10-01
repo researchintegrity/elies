@@ -47,13 +47,13 @@ def initiate_watermark_removal(
         ValidationError: Invalid mode or not a PDF
         ResourceNotFoundError: Document not found or not owned by the user
     """
-    documents_col = get_documents_collection()
-    
     # Validate aggressiveness mode
     if aggressiveness_mode not in [1, 2, 3]:
         raise ValidationError(
             f"Invalid aggressiveness mode: {aggressiveness_mode}. Must be 1, 2, or 3."
         )
+
+    documents_col = get_documents_collection()
 
     doc = get_owned_resource(get_documents_collection, document_id, user_id, "Document")
     doc_oid = doc["_id"]

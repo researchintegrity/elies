@@ -109,8 +109,6 @@ PDF_WATERMARK_REMOVAL_DOCKER_IMAGE = "pdf-watermark-removal:latest"
 # Use format placeholder `{mode}` for aggressiveness mode.
 WATERMARK_REMOVAL_OUTPUT_SUFFIX_TEMPLATE = "_watermark_removed_m{mode}.pdf"
 
-# Working directory inside the watermark-removal Docker container
-WATERMARK_REMOVAL_DOCKER_WORKDIR = CONTAINER_WORKSPACE_PATH
 
 # Docker image for panel extraction (system_modules/panel-extractor)
 PANEL_EXTRACTOR_DOCKER_IMAGE = "panel-extractor:latest"
@@ -119,24 +117,22 @@ PANEL_EXTRACTOR_DOCKER_IMAGE = "panel-extractor:latest"
 PANEL_EXTRACTION_DOCKER_WORKDIR = CONTAINER_WORKSPACE_PATH
 
 # Panel extraction settings
-PANEL_EXTRACTION_TIMEOUT = 600  # 10 minutes (panel extraction can take longer)
+PANEL_EXTRACTION_TIMEOUT = _env_int("PANEL_EXTRACTION_TIMEOUT", 600)  # 10 minutes
 MAX_IMAGES_PER_EXTRACTION = _env_int("MAX_IMAGES_PER_EXTRACTION", 20)  # Max images per panel extraction request
 # Upper bound for list fields in requests (image ids to index/delete/search over)
 MAX_IDS_PER_REQUEST = _env_int("MAX_IDS_PER_REQUEST", 1000)
 
 # Docker image for Copy-Move Detection - Dense method (system_modules/copy-move-detection)
 COPY_MOVE_DETECTION_DOCKER_IMAGE = "copy-move-detection:latest"
-COPY_MOVE_DETECTION_TIMEOUT = 600  # 10 minutes
-COPY_MOVE_DETECTION_DOCKER_WORKDIR = CONTAINER_WORKSPACE_PATH
+COPY_MOVE_DETECTION_TIMEOUT = _env_int("COPY_MOVE_DETECTION_TIMEOUT", 600)
 
 # Docker image for Copy-Move Detection - Keypoint method (system_modules/copy-move-detection-keypoint)
 COPY_MOVE_KEYPOINT_DOCKER_IMAGE = "copy-move-detection-keypoint:latest"
-COPY_MOVE_KEYPOINT_TIMEOUT = 600  # 10 minutes
+COPY_MOVE_KEYPOINT_TIMEOUT = _env_int("COPY_MOVE_KEYPOINT_TIMEOUT", 600)
 
 # Docker image for TruFor Detection (system_modules/TruFor)
 TRUFOR_DOCKER_IMAGE = "trufor:latest"
-TRUFOR_TIMEOUT = 600  # 10 minutes
-TRUFOR_DOCKER_WORKDIR = CONTAINER_WORKSPACE_PATH
+TRUFOR_TIMEOUT = _env_int("TRUFOR_TIMEOUT", 600)
 TRUFOR_USE_GPU = _env_bool("TRUFOR_USE_GPU", False)
 
 # ============================================================================
@@ -172,9 +168,25 @@ PROVENANCE_SERVICE_URL = os.getenv(
 PROVENANCE_TIMEOUT = _env_int("PROVENANCE_TIMEOUT", 600)  # 10 minutes default
 
 # Extraction timeouts (in seconds)
-DOCKER_EXTRACTION_TIMEOUT = 300  # 5 minutes
-DOCKER_COMPOSE_EXTRACTION_TIMEOUT = 300  # 5 minutes
-DOCKER_IMAGE_CHECK_TIMEOUT = 10  # Check if image exists
+DOCKER_EXTRACTION_TIMEOUT = _env_int("DOCKER_EXTRACTION_TIMEOUT", 300)  # PDF image extraction
+WATERMARK_REMOVAL_TIMEOUT = _env_int("WATERMARK_REMOVAL_TIMEOUT", 300)
+
+# ============================================================================
+# ANALYSIS TOOL CONTAINERS (app/utils/docker_runner.py)
+# ============================================================================
+# Every tool runs in its own named container that is killed when it exceeds
+# its timeout. Inputs are mounted read-only.
+DOCKER_BINARY = os.getenv("DOCKER_BINARY", "docker")
+# Network for tool containers: "none" (default; the tool images ship their
+# model weights) or e.g. "bridge" if a tool needs to download at runtime
+DOCKER_TOOL_NETWORK = os.getenv("DOCKER_TOOL_NETWORK", "none")
+# Optional resource limits, in docker run syntax (e.g. "8g", "2.5")
+DOCKER_TOOL_MEMORY = os.getenv("DOCKER_TOOL_MEMORY", "")
+DOCKER_TOOL_CPUS = os.getenv("DOCKER_TOOL_CPUS", "")
+DOCKER_TOOL_PIDS_LIMIT = _env_int("DOCKER_TOOL_PIDS_LIMIT", 1024)
+# Optional user for tool containers (e.g. "1000:1000"); output directories
+# must then be writable by that user
+DOCKER_TOOL_USER = os.getenv("DOCKER_TOOL_USER", "")
 
 
 

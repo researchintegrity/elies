@@ -1,22 +1,19 @@
 """
-Docker-based PDF watermark removal using pdf-watermark-removal container
+Docker-based PDF watermark removal using the pdf-watermark-removal container
 """
-import subprocess
-import os
 import logging
-from pathlib import Path
-from typing import Tuple, Dict
+import os
+import shutil
+import uuid
+from typing import Dict, Tuple
+
 from app.config.settings import (
-    DOCKER_EXTRACTION_TIMEOUT,
-    is_container_path,
-    convert_container_path_to_host,
-    convert_host_path_to_container,
     PDF_WATERMARK_REMOVAL_DOCKER_IMAGE,
     WATERMARK_REMOVAL_OUTPUT_SUFFIX_TEMPLATE,
-    WATERMARK_REMOVAL_DOCKER_WORKDIR,
-    CONTAINER_WORKSPACE_PATH,
-    HOST_WORKSPACE_PATH
+    WATERMARK_REMOVAL_TIMEOUT,
+    convert_host_path_to_container,
 )
+from app.utils.docker_runner import Mount, run_tool_container
 
 logger = logging.getLogger(__name__)
 
@@ -28,181 +25,69 @@ def remove_watermark_with_docker(
     aggressiveness_mode: int = 2,
     docker_image: str = None
 ) -> Tuple[bool, str, Dict]:
-    """Remove watermark from PDF using Docker container.
+    """Remove watermarks from a PDF using the pdf-watermark-removal container.
 
-    Runs the ``pdf-watermark-removal`` Docker container to remove watermarks from a
-    PDF file. The container will process the PDF and save the cleaned version to the
-    output directory.
-
-    Docker command example::
-
-        docker run \
-            -v $(pwd):/workspace \
-            pdf-watermark-removal:latest \
-            -i /workspace/input.pdf \
-            -o /workspace/output.pdf \
-            -m 2
+    The original PDF's directory is mounted read-only; the tool writes into a
+    private staging directory, and the cleaned PDF is then moved next to the
+    original as ``<name>_watermark_removed_m<mode>.pdf``.
 
     Args:
         doc_id: Document ID for tracking
-        user_id: User ID for workspace organization
-        pdf_file_path: Full path to the PDF file
-        aggressiveness_mode: Watermark removal aggressiveness (1, 2, or 3)
-            1 = explicit watermarks only
-            2 = text + repeated graphics (default)
-            3 = all graphics (most aggressive)
-        docker_image: Docker image to use (if not provided, uses configured default)
+        user_id: User ID
+        pdf_file_path: Path to the PDF
+        aggressiveness_mode: 1 (explicit watermarks), 2 (text + repeated
+            graphics, default) or 3 (all graphics)
+        docker_image: Override the configured image
 
     Returns:
-        Tuple of (success, status_message, output_file_info)
-        - success: Boolean indicating if removal was successful
-        - status_message: Human-readable status or error message
-        - output_file_info: Dict with file info {filename, path, size, status}
+        Tuple of (success, status_message, output_file_info) where
+        output_file_info has filename, path (container path), size, status
+        and aggressiveness_mode.
 
-    Notes:
-        Errors are returned in the tuple instead of being raised so callers can
-        handle failures consistently.
+    Raises:
+        DockerUnavailableError: Docker could not be reached (transient).
     """
-    output_file_info = {}
-    
-    # Use default Docker image if not specified
-    if docker_image is None:
-        docker_image = PDF_WATERMARK_REMOVAL_DOCKER_IMAGE
-    
-    # Validate aggressiveness mode
-    if aggressiveness_mode not in [1, 2, 3]:
-        error_msg = f"Invalid aggressiveness mode: {aggressiveness_mode}. Must be 1, 2, or 3."
-        logger.error(error_msg)
-        return False, error_msg, output_file_info
-    
+    output_file_info: Dict = {}
+    docker_image = docker_image or PDF_WATERMARK_REMOVAL_DOCKER_IMAGE
+
+    if aggressiveness_mode not in (1, 2, 3):
+        return False, f"Invalid aggressiveness mode: {aggressiveness_mode}. Must be 1, 2, or 3.", output_file_info
+    if not os.path.exists(pdf_file_path):
+        return False, f"PDF file not found: {pdf_file_path}", output_file_info
+
+    pdf_file_path = os.path.abspath(pdf_file_path)
+    pdf_dir = os.path.dirname(pdf_file_path)
+    pdf_filename = os.path.basename(pdf_file_path)
+    output_filename = (
+        f"{os.path.splitext(pdf_filename)[0]}"
+        f"{WATERMARK_REMOVAL_OUTPUT_SUFFIX_TEMPLATE.format(mode=aggressiveness_mode)}"
+    )
+    staging_dir = os.path.join(pdf_dir, ".watermark-staging", f"{doc_id}-{uuid.uuid4().hex[:8]}")
+    os.makedirs(staging_dir)
+
     try:
-        # Validate PDF file exists
-        if not os.path.exists(pdf_file_path):
-            error_msg = f"PDF file not found: {pdf_file_path}"
-            logger.error(error_msg)
-            return False, error_msg, output_file_info
-        
-        # Convert to absolute paths for Docker
-        pdf_file_path = os.path.abspath(pdf_file_path)
-        
-        # Get output filename (add suffix to avoid replacing original)
-        pdf_filename = os.path.basename(pdf_file_path)
-        pdf_name_without_ext = os.path.splitext(pdf_filename)[0]
-        # Use suffix template from settings so filename patterns are configurable
-        output_filename = f"{pdf_name_without_ext}{WATERMARK_REMOVAL_OUTPUT_SUFFIX_TEMPLATE.format(mode=aggressiveness_mode)}"
-        
-        # Output will be in same directory as input
-        output_dir = os.path.dirname(pdf_file_path)
-        output_file_path = os.path.join(output_dir, output_filename)
-        
-        logger.info(
-            f"Watermark removal starting for doc_id={doc_id}, user_id={user_id}\n"
-            f"  Input PDF path: {pdf_file_path}\n"
-            f"  Output PDF path: {output_file_path}\n"
-            f"  Aggressiveness mode: {aggressiveness_mode}\n"
-            f"  Docker image: {docker_image}\n"
-            f"  is_container_path: {is_container_path(output_dir)}\n"
-            f"  CONTAINER_WORKSPACE_PATH: {CONTAINER_WORKSPACE_PATH}"
-        )
-        
-        # Get the directory containing the PDF
-        pdf_dir = os.path.dirname(pdf_file_path)
-        
-        # Handle Docker running inside a container vs on the host:
-        # 
-        # In host environment:
-        #   - pdf_file_path will be relative or absolute to host
-        #   - We pass it directly to Docker since Docker daemon is on same host
-        #
-        # In container environment (Celery worker in Docker):
-        #   - pdf_file_path will be like "/workspace/user/pdfs/file.pdf"
-        #   - Docker daemon is on the host, needs the actual host path
-        #   - We need to convert using HOST_WORKSPACE_PATH environment variable
-        
-        host_pdf_dir = pdf_dir
-        
-        # If we're in the worker container
-        if is_container_path(pdf_dir):
-            # We're running in the worker container, need to convert paths for Docker daemon on host
-            logger.info(f"Detected container environment. Converting paths for host Docker daemon")
-            
-            # Convert: container path to host path
-            host_pdf_dir = str(convert_container_path_to_host(Path(pdf_dir)))
-            
-            logger.debug(
-                f"Container path conversion:\n"
-                f"  Original PDF dir: {pdf_dir}\n"
-                f"  Host PDF dir: {host_pdf_dir}"
-            )
-        
-        # Construct Docker command (mount host pdf_dir to container workdir)
-        docker_command = [
-            "docker",
-            "run",
-            "--rm",
-            "-v", f"{host_pdf_dir}:{WATERMARK_REMOVAL_DOCKER_WORKDIR}",
+        run = run_tool_container(
             docker_image,
-            "-i", f"{WATERMARK_REMOVAL_DOCKER_WORKDIR}/{pdf_filename}",
-            "-o", f"{WATERMARK_REMOVAL_DOCKER_WORKDIR}/{output_filename}",
-            "-m", str(aggressiveness_mode)
-        ]
-        
-        logger.info(f"Docker command: {' '.join(docker_command)}")
-        
-        # Execute Docker command
-        try:
-            result = subprocess.run(
-                docker_command,
-                timeout=DOCKER_EXTRACTION_TIMEOUT,
-                capture_output=True,
-                text=True,
-                check=False  # Don't raise exception on non-zero exit
-            )
-            
-            logger.info(f"Docker stdout: {result.stdout}")
-            if result.stderr:
-                logger.warning(f"Docker stderr: {result.stderr}")
-            
-            # Check if output file was created
-            if os.path.exists(output_file_path):
-                output_file_size = os.path.getsize(output_file_path)
-                
-                container_path = str(convert_container_path_to_host(Path(output_file_path)))
-                
-                output_file_info = {
-                    "filename": output_filename,
-                    "path": container_path,
-                    "size": output_file_size,
-                    "status": "completed",
-                    "aggressiveness_mode": aggressiveness_mode
-                }
-                
-                success_msg = (
-                    f"Watermark removal successful for doc_id={doc_id}. "
-                    f"Output: {output_filename} ({output_file_size} bytes)"
-                )
-                logger.info(success_msg)
-                return True, success_msg, output_file_info
-            else:
-                error_msg = f"Docker did not produce output file: {output_file_path}"
-                logger.error(error_msg)
-                logger.error(f"Docker exit code: {result.returncode}")
-                return False, error_msg, output_file_info
-        
-        except subprocess.TimeoutExpired:
-            error_msg = (
-                f"Watermark removal timed out after {DOCKER_EXTRACTION_TIMEOUT} seconds "
-                f"for doc_id={doc_id}"
-            )
-            logger.error(error_msg)
-            return False, error_msg, output_file_info
-        
-        except Exception as e:
-            error_msg = f"Docker execution error for doc_id={doc_id}: {str(e)}"
-            logger.error(error_msg)
-            return False, error_msg, output_file_info
-    
-    except Exception as e:
-        error_msg = f"Unexpected error during watermark removal for doc_id={doc_id}: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        return False, error_msg, output_file_info
+            ["-i", f"/input/{pdf_filename}", "-o", f"/output/{output_filename}", "-m", str(aggressiveness_mode)],
+            mounts=[Mount(pdf_dir, "/input"), Mount(staging_dir, "/output", read_only=False)],
+            timeout=WATERMARK_REMOVAL_TIMEOUT,
+            purpose="watermark",
+        )
+        staged_output = os.path.join(staging_dir, output_filename)
+        if not run.ok or not os.path.exists(staged_output):
+            reason = run.describe_failure() if not run.ok else "no output file produced"
+            return False, f"Watermark removal failed ({reason})", output_file_info
+
+        final_path = os.path.join(pdf_dir, output_filename)
+        shutil.move(staged_output, final_path)
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+
+    output_file_info = {
+        "filename": output_filename,
+        "path": str(convert_host_path_to_container(final_path)),
+        "size": os.path.getsize(final_path),
+        "status": "completed",
+        "aggressiveness_mode": aggressiveness_mode
+    }
+    return True, f"Watermark removal successful for doc_id={doc_id}. Output: {output_filename}", output_file_info

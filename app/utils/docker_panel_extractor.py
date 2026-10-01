@@ -5,22 +5,19 @@ Extracts individual panels from images using YOLO-based panel detection.
 Outputs extracted panel images and a PANELS.csv file mapping panels to source images
 with bounding box coordinates and classifications.
 """
-import subprocess
-import os
 import csv
 import logging
-from typing import Tuple, Dict, List, Any
+import os
 from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
 from app.config.settings import (
-    DOCKER_EXTRACTION_TIMEOUT,
-    is_container_path,
-    convert_container_path_to_host,
-    convert_host_path_to_container,
-    PANEL_EXTRACTOR_DOCKER_IMAGE,
     PANEL_EXTRACTION_DOCKER_WORKDIR,
-    CONTAINER_WORKSPACE_PATH,
-    HOST_WORKSPACE_PATH
+    PANEL_EXTRACTION_TIMEOUT,
+    PANEL_EXTRACTOR_DOCKER_IMAGE,
+    convert_host_path_to_container,
 )
+from app.utils.docker_runner import Mount, run_tool_container
 
 logger = logging.getLogger(__name__)
 
@@ -31,229 +28,76 @@ def extract_panels_with_docker(
     image_paths: List[str],
     docker_image: str = None
 ) -> Tuple[bool, str, Dict]:
-    """Extract panels from images using Docker container.
+    """Extract panels from images using the panel-extractor container.
 
-    Runs the ``panel-extractor`` Docker container to detect and extract individual
-    panels from images. The container outputs extracted panel images and a PANELS.csv
-    file with metadata.
-
-    Docker command example::
-
-        docker run \\
-            -v /host/path/workspace/user_id/images:/workspace/images \\
-            -v /host/path/workspace/user_id/images/panels:/workspace/output \\
-            panel-extractor:latest \\
-            --input /workspace/images \\
-            --output /workspace/output
-
-    Args:
-        image_ids: List of MongoDB image document IDs being processed
-        user_id: User ID for workspace organization
-        image_paths: List of full paths to image files to process
-        docker_image: Docker image to use (if not provided, uses configured default)
+    The user's images directory is mounted read-only as input and its
+    ``panels`` subdirectory writable as output. The container writes panel
+    images and a PANELS.csv file (FIGNAME, PANEL_ID, LABEL, X0, Y0, X1, Y1).
 
     Returns:
-        Tuple of (success, status_message, output_info)
-        - success: Boolean indicating if extraction was successful
-        - status_message: Human-readable status or error message
-        - output_info: Dict with extraction info {
-            panels_count, panels_csv_path, output_dir, panels_data
-          }
+        Tuple of (success, status_message, output_info) where output_info has
+        panels_count, panels_csv_path, output_dir and panels_data.
 
-    Notes:
-        The PANELS.csv file contains columns:
-        - FIGNAME: Basename of source image
-        - PANEL_ID: Unique panel identifier
-        - LABEL: Panel type/classification (Blots, Graphs, etc.)
-        - X0, Y0, X1, Y1: Bounding box coordinates
-
-        Errors are returned in the tuple instead of being raised so callers can
-        handle failures consistently.
+    Raises:
+        DockerUnavailableError: Docker could not be reached (transient).
     """
-    output_info = {}
+    output_info: Dict = {}
+    docker_image = docker_image or PANEL_EXTRACTOR_DOCKER_IMAGE
 
-    # Use default Docker image if not specified
-    if docker_image is None:
-        docker_image = PANEL_EXTRACTOR_DOCKER_IMAGE
+    if not image_paths:
+        return False, "No image paths provided", output_info
+    if len(image_paths) != len(image_ids):
+        return False, f"Mismatch between image_ids ({len(image_ids)}) and image_paths ({len(image_paths)})", output_info
+    for path in image_paths:
+        if not os.path.exists(path):
+            return False, f"Image file not found: {path}", output_info
+
+    # All images live under /<workspace>/<user_id>/images/
+    parts = Path(image_paths[0]).parts
+    if "images" not in parts:
+        return False, f"No 'images' directory found in path: {image_paths[0]}", output_info
+    input_dir = str(Path(*parts[:parts.index("images") + 1]))
+    for path in image_paths:
+        if os.path.commonpath([input_dir, path]) != input_dir:
+            return False, f"All images must be under the input directory {input_dir}. Got: {path}", output_info
+
+    output_dir = os.path.join(input_dir, "panels")
+    os.makedirs(output_dir, exist_ok=True)
+
+    workdir = PANEL_EXTRACTION_DOCKER_WORKDIR
+    relative_paths = [os.path.relpath(path, input_dir) for path in image_paths]
+    args = ["--input-path", *[f"{workdir}/input/{rel}" for rel in relative_paths],
+            "--output-path", f"{workdir}/output"]
+
+    run = run_tool_container(
+        docker_image,
+        args,
+        mounts=[Mount(input_dir, f"{workdir}/input"), Mount(output_dir, f"{workdir}/output", read_only=False)],
+        timeout=PANEL_EXTRACTION_TIMEOUT,
+        purpose="panels",
+    )
+    if run.stderr:
+        logger.debug("panel-extractor stderr: %s", run.stderr[-2000:])
+
+    panels_csv_path = os.path.join(output_dir, "PANELS.csv")
+    if not run.ok or not os.path.exists(panels_csv_path):
+        reason = run.describe_failure() if not run.ok else "no PANELS.csv produced"
+        return False, f"Panel extraction failed ({reason})", output_info
 
     try:
-        # Validate inputs
-        if not image_paths:
-            error_msg = "No image paths provided"
-            logger.error(error_msg)
-            return False, error_msg, output_info
-
-        if len(image_paths) != len(image_ids):
-            error_msg = f"Mismatch between image_ids ({len(image_ids)}) and image_paths ({len(image_paths)})"
-            logger.error(error_msg)
-            return False, error_msg, output_info
-
-        # Validate all image files exist
-        for path in image_paths:
-            if not os.path.exists(path):
-                error_msg = f"Image file not found: {path}"
-                logger.error(error_msg)
-                return False, error_msg, output_info
-
-        # Convert to absolute paths
-        image_paths = [os.path.abspath(p) for p in image_paths]
-
-        # Get the input directory (all images should be in same directory)
-        # we are using the /<workspace>/<user_id>/images/ structure
-        # input dir should be path until find /images/
-        path = Path(image_paths[0])
-        parts = path.parts
-        images_index = None
-        for i, part in enumerate(parts):
-            if part == "images":
-                images_index = i
-                break
-        if images_index is None:
-            error_msg = f"No 'images' directory found in path: {image_paths[0]}"
-            logger.error(error_msg)
-            return False, error_msg, output_info
-        input_dir = str(Path(*parts[:images_index + 1]))
-
-        # Verify all images are in the same directory
-        # This is a requirement for mounting into Docker
-        for path in image_paths:
-            if os.path.commonpath([input_dir, path]) != input_dir:
-                error_msg = f"All images must be under the input directory {input_dir}. Got: {path}"
-                logger.error(error_msg)
-                return False, error_msg, output_info
-
-        output_dir = os.path.join(input_dir, "panels")
-        os.makedirs(output_dir, exist_ok=True)
-
-        logger.info(
-            f"Panel extraction starting for user_id={user_id}\n"
-            f"  Input directory: {input_dir}\n"
-            f"  Output directory: {output_dir}\n"
-            f"  Number of images: {len(image_paths)}\n"
-            f"  Docker image: {docker_image}\n"
-            f"  is_container_path: {is_container_path(input_dir)}\n"
-            f"  CONTAINER_WORKSPACE_PATH: {CONTAINER_WORKSPACE_PATH}"
-        )
-
-        # Handle Docker running inside a container vs on the host
-        host_input_dir = input_dir
-        host_output_dir = output_dir
-        
-        is_container_env = is_container_path(input_dir)
-        if is_container_env:
-            # We're running in the worker container, need to convert paths for Docker daemon on host
-            logger.info(f"Detected container environment. Converting paths for host Docker daemon")
-
-            if not str(HOST_WORKSPACE_PATH):
-                error_msg = "HOST_WORKSPACE_PATH environment variable not set"
-                logger.error(error_msg)
-                return False, error_msg, output_info
-
-            # Convert: container path to host path
-            host_input_dir = str(convert_container_path_to_host(input_dir))
-            host_output_dir = str(convert_container_path_to_host(output_dir))
-
-            logger.debug(
-                f"Container path conversion:\n"
-                f"  Original input dir: {input_dir}\n"
-                f"  Original output dir: {output_dir}\n"
-                f"  Host input dir: {host_input_dir}\n"
-                f"  Host output dir: {host_output_dir}"
-            )
-
-        # Construct Docker command
-        # The panel extractor expects: --input-path IMAGE_PATH [IMAGE_PATH ...]
-        # and --output-path for the output directory
-        image_filenames = [path.replace(str(input_dir) + os.sep, "") for path in image_paths]
-        
-        docker_command = [
-            "docker",
-            "run",
-            "--rm",
-            "-v", f"{host_input_dir}:{PANEL_EXTRACTION_DOCKER_WORKDIR}/input",
-            "-v", f"{host_output_dir}:{PANEL_EXTRACTION_DOCKER_WORKDIR}/output",
-            docker_image,
-            "--input-path"
-        ]
-        
-        # Add individual image file paths
-        for filename in image_filenames:
-            docker_command.append(f"{PANEL_EXTRACTION_DOCKER_WORKDIR}/input/{filename}")
-        
-        # Add output path
-        docker_command.extend([
-            "--output-path", f"{PANEL_EXTRACTION_DOCKER_WORKDIR}/output"
-        ])
-
-        logger.info(f"Docker command: {' '.join(docker_command)}")
-
-        # Execute Docker command
-        try:
-            result = subprocess.run(
-                docker_command,
-                timeout=DOCKER_EXTRACTION_TIMEOUT,
-                capture_output=True,
-                text=True,
-                check=False  # Don't raise exception on non-zero exit
-            )
-
-            logger.info(f"Docker stdout: {result.stdout}")
-            if result.stderr:
-                logger.warning(f"Docker stderr: {result.stderr}")
-
-            # Check for PANELS.csv output
-            panels_csv_path = os.path.join(output_dir, "PANELS.csv")
-
-            if not os.path.exists(panels_csv_path):
-                error_msg = f"Docker did not produce PANELS.csv: {panels_csv_path}"
-                logger.error(error_msg)
-                logger.error(f"Docker exit code: {result.returncode}")
-                return False, error_msg, output_info
-
-            # Parse PANELS.csv to extract panel metadata
-            try:
-                panels_data = _parse_panels_csv(
-                    panels_csv_path,
-                    image_paths,
-                    image_ids
-                )
-            except Exception as e:
-                error_msg = f"Error parsing PANELS.csv: {str(e)}"
-                logger.error(error_msg, exc_info=True)
-                return False, error_msg, output_info
-
-            output_info = {
-                "panels_count": len(panels_data),
-                "panels_csv_path": str(convert_host_path_to_container(panels_csv_path)),
-                "output_dir": str(convert_host_path_to_container(output_dir)),
-                "panels_data": panels_data,
-                "status": "completed"
-            }
-
-            success_msg = (
-                f"Panel extraction successful for user_id={user_id}. "
-                f"Extracted {len(panels_data)} panels"
-            )
-            logger.info(success_msg)
-            return True, success_msg, output_info
-
-        except subprocess.TimeoutExpired:
-            error_msg = (
-                f"Panel extraction timed out after {DOCKER_EXTRACTION_TIMEOUT} seconds "
-                f"for user_id={user_id}"
-            )
-            logger.error(error_msg)
-            return False, error_msg, output_info
-
-        except Exception as e:
-            error_msg = f"Docker execution error for user_id={user_id}: {str(e)}"
-            logger.error(error_msg)
-            return False, error_msg, output_info
-
+        panels_data = _parse_panels_csv(panels_csv_path, image_paths, image_ids)
     except Exception as e:
-        error_msg = f"Unexpected error during panel extraction for user_id={user_id}: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        return False, error_msg, output_info
+        logger.error("Error parsing PANELS.csv: %s", e, exc_info=True)
+        return False, f"Error parsing PANELS.csv: {e}", output_info
+
+    output_info = {
+        "panels_count": len(panels_data),
+        "panels_csv_path": str(convert_host_path_to_container(panels_csv_path)),
+        "output_dir": str(convert_host_path_to_container(output_dir)),
+        "panels_data": panels_data,
+        "status": "completed"
+    }
+    return True, f"Panel extraction successful for user_id={user_id}. Extracted {len(panels_data)} panels", output_info
 
 
 def _parse_panels_csv(

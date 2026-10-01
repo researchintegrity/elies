@@ -10,6 +10,7 @@ from typing import Optional, Tuple
 logger = logging.getLogger(__name__)
 
 # Import storage configuration
+from app.exceptions import TransientError
 from app.config.storage_quota import MAX_PDF_FILE_SIZE, MAX_IMAGE_FILE_SIZE, DEFAULT_USER_STORAGE_QUOTA
 from app.config.settings import (
     PDF_EXTRACTOR_DOCKER_IMAGE, 
@@ -349,7 +350,10 @@ def figure_extraction_hook(
             logger.warning(f"Extraction errors for doc_id={doc_id}: {extraction_errors}")
         
         return extracted_count, extraction_errors, extracted_files
-    
+
+    except TransientError:
+        # Docker unreachable: let the task retry later
+        raise
     except Exception as e:
         # Don't raise - return as error in list
         error_msg = f"Extraction failed: {str(e)}"
