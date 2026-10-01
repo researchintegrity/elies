@@ -275,7 +275,7 @@ def search_similar_sync(
 def search_by_upload(
     file: UploadFile = File(...),
     top_k: int = Query(10, ge=1, le=100),
-    labels: Optional[List[str]] = Query(None),
+    labels: Optional[List[str]] = Query(None, max_length=50),
     current_user: dict = Depends(get_current_user)
 ):
     """

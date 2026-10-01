@@ -67,8 +67,8 @@ def create_single_annotation(
 def list_single_annotations(
     image_id: str = Query(..., description="Image ID to get annotations for"),
     current_user: dict = Depends(get_current_user),
-    limit: int = 100,
-    offset: int = 0
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0)
 ):
     """
     Get single-image annotations for a specific image.

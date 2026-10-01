@@ -8,6 +8,7 @@ Provides endpoints for administrators to:
 - Reset user passwords
 - Activate/deactivate user accounts
 """
+import re
 from fastapi import APIRouter, HTTPException, status, Depends, Query
 from datetime import datetime
 from typing import Optional
@@ -45,7 +46,7 @@ router = APIRouter(prefix="/admin", tags=["Admin"])
 def list_users(
     page: int = Query(1, ge=1, description="Page number (starts at 1)"),
     page_size: int = Query(20, ge=1, le=100, description="Number of users per page"),
-    search: Optional[str] = Query(None, description="Search by username or email"),
+    search: Optional[str] = Query(None, max_length=100, description="Search by username or email"),
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
     role: Optional[str] = Query(None, description="Filter by role (e.g., 'admin')"),
     current_admin: dict = Depends(get_current_admin_user)
@@ -67,10 +68,12 @@ def list_users(
     query = {}
     
     if search:
+        # Literal, case-insensitive match: user input is never a regex
+        pattern = {"$regex": re.escape(search), "$options": "i"}
         query["$or"] = [
-            {"username": {"$regex": search, "$options": "i"}},
-            {"email": {"$regex": search, "$options": "i"}},
-            {"full_name": {"$regex": search, "$options": "i"}},
+            {"username": pattern},
+            {"email": pattern},
+            {"full_name": pattern},
         ]
     
     if is_active is not None:
@@ -342,6 +345,8 @@ def reset_user_password(
         {
             "$set": {
                 "hashed_password": hashed_password,
+                # The user should replace an admin-chosen password (PUT /users/me/password)
+                "must_change_password": True,
                 "updated_at": datetime.utcnow(),
             }
         }

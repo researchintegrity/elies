@@ -199,8 +199,8 @@ def list_dual_annotations(
     source_image_id: str = Query(..., description="Source image ID to get annotations for"),
     target_image_id: Optional[str] = Query(None, description="Optional target image ID to filter by"),
     current_user: dict = Depends(get_current_user),
-    limit: int = 100,
-    offset: int = 0
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0)
 ):
     """
     Get dual-image annotations for a specific source image.

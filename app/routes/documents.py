@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse
 from app.celery_config import celery_app
 from app.config.storage_quota import DEFAULT_USER_STORAGE_QUOTA
 from app.db.mongodb import get_documents_collection, get_images_collection
+from app.exceptions import ResourceNotFoundError
 from app.schemas import (
     DocumentResponse,
     ImageResponse,
@@ -26,7 +27,7 @@ from app.schemas import (
     JobType,
 )
 from app.services.document_service import delete_document_and_artifacts
-from app.services.job_logger import complete_job, create_job_log
+from app.services.job_logger import attach_celery_task, complete_job, create_job_log, find_job_by_celery_task
 from app.services.quota_helpers import augment_with_quota
 from app.services.resource_helpers import get_owned_resource
 from app.services.upload_service import save_uploaded_pdf
@@ -113,6 +114,7 @@ def upload_document(
             detail="Document saved, but image extraction could not be started. Please try again later."
         )
 
+    attach_celery_task(job_id, task.id)
     documents_col.update_one({"_id": doc_oid}, {"$set": {"task_id": task.id}})
     doc_record["task_id"] = task.id
     doc_record["_id"] = doc_id
@@ -227,8 +229,8 @@ def get_document(
 def get_document_images(
     doc_id: str,
     current_user: dict = Depends(get_current_user),
-    limit: int = 50,
-    offset: int = 0
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0)
 ):
     """
     Get all extracted images from a specific document
@@ -350,49 +352,33 @@ def get_task_status(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Get status of image extraction task
-    
-    Query a background task's status. The status can be:
+    Get status of one of the current user's image extraction tasks
+
+    The status can be:
     - PENDING: Task is waiting in the queue
     - STARTED: Task has started processing
     - SUCCESS: Task completed successfully
     - FAILURE: Task failed
     - RETRY: Task is retrying after failure
     - REVOKED: Task was cancelled
-    
-    Returns:
-        {
-            "task_id": "abc-123-def",
-            "status": "SUCCESS",
-            "result": {
-                "doc_id": "507f1f77bcf86cd799439011",
-                "extracted_count": 5,
-                "errors": []
-            }
-        }
+
+    Returns 404 for tasks that belong to other users.
     """
-    try:
-        task = AsyncResult(task_id, app=celery_app)
-        
-        response = {
-            "task_id": task_id,
-            "status": task.status,
-        }
-        
-        if task.successful():
-            response["result"] = task.result
-        elif task.failed():
-            response["error"] = str(task.info)
-        elif task.status == "RETRY":
-            response["error"] = str(task.info)
-        
-        return response
-        
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to retrieve task status: {str(e)}"
-        )
+    user_id_str = str(current_user["_id"])
+    owned = (
+        get_documents_collection().find_one({"task_id": task_id, "user_id": user_id_str}, {"_id": 1})
+        or find_job_by_celery_task(task_id, user_id_str)
+    )
+    if not owned:
+        raise ResourceNotFoundError("Task", task_id)
+
+    task = AsyncResult(task_id, app=celery_app)
+    response = {"task_id": task_id, "status": task.status}
+    if task.successful():
+        response["result"] = task.result
+    elif task.failed() or task.status == "RETRY":
+        response["error"] = str(task.info)
+    return response
 
 
 # ============================================================================

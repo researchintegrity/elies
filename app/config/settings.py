@@ -120,7 +120,9 @@ PANEL_EXTRACTION_DOCKER_WORKDIR = CONTAINER_WORKSPACE_PATH
 
 # Panel extraction settings
 PANEL_EXTRACTION_TIMEOUT = 600  # 10 minutes (panel extraction can take longer)
-MAX_IMAGES_PER_EXTRACTION = 20  # Maximum number of images to process in one batch
+MAX_IMAGES_PER_EXTRACTION = _env_int("MAX_IMAGES_PER_EXTRACTION", 20)  # Max images per panel extraction request
+# Upper bound for list fields in requests (image ids to index/delete/search over)
+MAX_IDS_PER_REQUEST = _env_int("MAX_IDS_PER_REQUEST", 1000)
 
 # Docker image for Copy-Move Detection - Dense method (system_modules/copy-move-detection)
 COPY_MOVE_DETECTION_DOCKER_IMAGE = "copy-move-detection:latest"
@@ -221,8 +223,18 @@ IMAGE_MIME_TYPES = {
 USERNAME_MIN_LENGTH = 3
 USERNAME_MAX_LENGTH = 50
 
-# Password constraints
-PASSWORD_MIN_LENGTH = 4
+# Usernames: letters, digits, '.', '_' and '-'
+USERNAME_PATTERN = r"^[A-Za-z0-9_.-]+$"
+
+# Password constraints. bcrypt ignores everything after 72 bytes, so longer
+# passwords are rejected rather than silently truncated.
+PASSWORD_MIN_LENGTH = _env_int("PASSWORD_MIN_LENGTH", 12)
+PASSWORD_MAX_BYTES = 72
+
+# Brute-force protection for /auth/login and /auth/register
+LOGIN_MAX_FAILURES = _env_int("LOGIN_MAX_FAILURES", 10)  # per client IP + account
+LOGIN_FAILURE_WINDOW_SECONDS = _env_int("LOGIN_FAILURE_WINDOW_SECONDS", 900)
+REGISTRATION_MAX_PER_HOUR = _env_int("REGISTRATION_MAX_PER_HOUR", 20)  # per client IP
 
 # Full name constraints
 FULL_NAME_MAX_LENGTH = 100

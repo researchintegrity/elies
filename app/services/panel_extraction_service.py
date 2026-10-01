@@ -5,8 +5,9 @@ import logging
 from typing import Dict, List, Any, Optional
 from bson import ObjectId
 from app.db.mongodb import get_images_collection
+from app.exceptions import ResourceNotFoundError
 from app.schemas import JobType
-from app.services.job_logger import create_job_log
+from app.services.job_logger import attach_celery_task, create_job_log, find_job_by_celery_task
 from app.tasks.panel_extraction import extract_panels_from_images
 logger = logging.getLogger(__name__)
 
@@ -112,6 +113,7 @@ def initiate_panel_extraction(
             job_id=job_id
         )
 
+        attach_celery_task(job_id, task.id)
         result = {
             "task_id": task.id,
             "status": "queued",
@@ -148,17 +150,15 @@ def get_panel_extraction_status(
     """
     from celery.result import AsyncResult
 
+    # Only the user who started the extraction may see its result
+    if not find_job_by_celery_task(task_id, user_id):
+        raise ResourceNotFoundError("Task", task_id)
+
     try:
         task_result = AsyncResult(task_id, app=extract_panels_from_images.app)
-
-        # Get basic task info
         task_state = task_result.state
-        task_info = task_result.info or {}
-
-        # Validate user owns this task by checking if returned image_ids
-        # Actually this is difficult without storing task metadata
-        # For now, we just return the status
-        # In production, you might store task metadata in a separate collection
+        # A failed task's info is the exception, not a result dict
+        task_info = task_result.info if isinstance(task_result.info, dict) else {}
 
         response = {
             "task_id": task_id,
@@ -166,7 +166,7 @@ def get_panel_extraction_status(
             "image_ids": task_info.get("image_ids", []),
             "extracted_panels_count": task_info.get("extracted_panels_count", 0),
             "message": task_info.get("message"),
-            "error": task_info.get("error")
+            "error": task_info.get("error") or (str(task_result.info) if task_result.failed() else None)
         }
 
         # If task is completed, retrieve and include extracted panel documents

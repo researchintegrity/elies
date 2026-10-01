@@ -1,49 +1,68 @@
 """
 Pydantic schemas for request/response validation
 """
-from pydantic import BaseModel, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_validator
 from datetime import datetime
-from typing import Optional, Dict, List, Any, Literal
+from typing import Annotated, Any, Dict, List, Literal, Optional
 from bson import ObjectId
 from enum import Enum
 from app.config.settings import (
+    MAX_IDS_PER_REQUEST,
+    MAX_IMAGES_PER_EXTRACTION,
     USERNAME_MIN_LENGTH,
     USERNAME_MAX_LENGTH,
+    USERNAME_PATTERN,
     PASSWORD_MIN_LENGTH,
+    PASSWORD_MAX_BYTES,
     FULL_NAME_MAX_LENGTH,
 )
 
 
-class UserLogin(BaseModel):
-    """User login credentials"""
-    username: str = Field(..., min_length=USERNAME_MIN_LENGTH, description="Username or email")
-    password: str = Field(..., min_length=PASSWORD_MIN_LENGTH, description="User password")
+# Image type / CBIR label: a short, non-empty string
+Label = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=100)]
+MAX_LABELS = 50
 
-    class Config:
-        schema_extra = {
-            "example": {
-                "username": "johndoe",
-                "password": "securepassword123"
-            }
-        }
+
+def _password_within_bcrypt_limit(value: Optional[str]) -> Optional[str]:
+    """bcrypt ignores bytes after the 72nd: reject longer passwords instead."""
+    if value is not None and len(value.encode("utf-8")) > PASSWORD_MAX_BYTES:
+        raise ValueError(f"Password must be at most {PASSWORD_MAX_BYTES} bytes long")
+    return value
 
 
 class UserRegister(BaseModel):
     """User registration data"""
-    username: str = Field(..., min_length=USERNAME_MIN_LENGTH, max_length=USERNAME_MAX_LENGTH, description="Unique username")
+    username: str = Field(
+        ...,
+        min_length=USERNAME_MIN_LENGTH,
+        max_length=USERNAME_MAX_LENGTH,
+        pattern=USERNAME_PATTERN,
+        description="Unique username (letters, digits, '.', '_' and '-')",
+    )
     email: EmailStr = Field(..., description="Valid email address")
     password: str = Field(..., min_length=PASSWORD_MIN_LENGTH, description=f"Password (min {PASSWORD_MIN_LENGTH} characters)")
-    full_name: Optional[str] = Field(None, description="User's full name")
+    full_name: Optional[str] = Field(None, max_length=FULL_NAME_MAX_LENGTH, description="User's full name")
 
-    class Config:
-        schema_extra = {
+    _check_password = field_validator("password")(classmethod(lambda cls, v: _password_within_bcrypt_limit(v)))
+
+    model_config = {
+        "json_schema_extra": {
             "example": {
                 "username": "johndoe",
                 "email": "john@example.com",
-                "password": "securepassword123",
+                "password": "a-long-passphrase",
                 "full_name": "John Doe"
             }
         }
+    }
+
+
+class PasswordChangeRequest(BaseModel):
+    """Change the current user's password"""
+    current_password: str = Field(..., description="Current password")
+    new_password: str = Field(..., min_length=PASSWORD_MIN_LENGTH, description=f"New password (min {PASSWORD_MIN_LENGTH} characters)")
+
+    _check_password = field_validator("new_password")(classmethod(lambda cls, v: _password_within_bcrypt_limit(v)))
 
 
 class UserUpdate(BaseModel):
@@ -70,6 +89,7 @@ class UserResponse(BaseModel):
     roles: List[str] = Field(default_factory=lambda: ["user"])
     storage_used_bytes: int = 0
     storage_limit_bytes: int = 1073741824  # 1 GB default
+    must_change_password: bool = False
     created_at: datetime
     updated_at: datetime
     last_login_at: Optional[datetime] = None
@@ -443,7 +463,7 @@ class ImageTypeListResponse(BaseModel):
 
 class ImageTypesUpdateRequest(BaseModel):
     """Request to add types to an image"""
-    types: List[str] = Field(..., description="List of types to add (duplicates ignored)")
+    types: List[Label] = Field(..., min_length=1, max_length=MAX_LABELS, description="List of types to add (duplicates ignored)")
 
     class Config:
         schema_extra = {
@@ -741,7 +761,10 @@ class WatermarkRemovalStatusResponse(BaseModel):
 
 class PanelExtractionRequest(BaseModel):
     """Panel extraction request"""
-    image_ids: list[str] = Field(..., description="MongoDB IDs of selected images to extract panels from")
+    image_ids: List[str] = Field(
+        ..., min_length=1, max_length=MAX_IMAGES_PER_EXTRACTION,
+        description=f"MongoDB IDs of selected images to extract panels from (max {MAX_IMAGES_PER_EXTRACTION})"
+    )
     model_type: str = Field(
         default="default",
         description="Optional YOLO model selection"
@@ -825,8 +848,8 @@ class PanelExtractionStatusResponse(BaseModel):
 
 class CBIRIndexRequest(BaseModel):
     """Request to index images in CBIR system"""
-    image_ids: Optional[List[str]] = Field(None, description="Specific image IDs to index. If None, indexes all user images.")
-    labels: Optional[List[str]] = Field(None, description="Labels to apply to indexed images")
+    image_ids: Optional[List[str]] = Field(None, max_length=MAX_IDS_PER_REQUEST, description="Specific image IDs to index. If None, indexes all user images.")
+    labels: Optional[List[Label]] = Field(None, max_length=MAX_LABELS, description="Labels to apply to indexed images")
 
     class Config:
         json_schema_extra = {
@@ -841,7 +864,7 @@ class CBIRSearchRequest(BaseModel):
     """Request to search for similar images"""
     image_id: str = Field(..., description="Query image ID")
     top_k: int = Field(10, ge=1, le=100, description="Number of similar images to return")
-    labels: Optional[List[str]] = Field(None, description="Filter results by labels")
+    labels: Optional[List[Label]] = Field(None, max_length=MAX_LABELS, description="Filter results by labels")
 
     class Config:
         json_schema_extra = {
@@ -880,7 +903,7 @@ class CBIRSearchResponse(BaseModel):
 
 class CBIRDeleteRequest(BaseModel):
     """Request to delete images from CBIR index"""
-    image_ids: List[str] = Field(..., min_length=1, description="Image IDs to remove from index")
+    image_ids: List[str] = Field(..., min_length=1, max_length=MAX_IDS_PER_REQUEST, description="Image IDs to remove from index")
 
     class Config:
         json_schema_extra = {
@@ -1232,6 +1255,7 @@ class AdminUserResponse(BaseModel):
     roles: List[str] = Field(default_factory=lambda: ["user"])
     storage_used_bytes: int = 0
     storage_limit_bytes: int = 1073741824
+    must_change_password: bool = False
     created_at: datetime
     updated_at: datetime
     last_login_at: Optional[datetime] = None
@@ -1309,6 +1333,8 @@ class AdminResetPasswordRequest(BaseModel):
         min_length=PASSWORD_MIN_LENGTH,
         description=f"New password (min {PASSWORD_MIN_LENGTH} characters). If not provided, a secure random password will be generated."
     )
+
+    _check_password = field_validator("new_password")(classmethod(lambda cls, v: _password_within_bcrypt_limit(v)))
 
     class Config:
         schema_extra = {

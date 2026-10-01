@@ -14,7 +14,7 @@ from app.schemas import (
     JobType,
 )
 from app.services.resource_helpers import get_owned_resource
-from app.services.job_logger import create_job_log
+from app.services.job_logger import attach_celery_task, create_job_log
 from app.config.settings import convert_container_path_to_host, is_container_path
 from datetime import datetime
 from bson import ObjectId
@@ -555,7 +555,7 @@ def analyze_copy_move_single(
     )
     
     # Trigger task with analysis_id and job_id
-    detect_copy_move.delay(
+    task = detect_copy_move.delay(
         analysis_id=analysis_id,
         image_id=request.image_id,
         user_id=user_id_str,
@@ -565,6 +565,8 @@ def analyze_copy_move_single(
         job_id=job_id
     )
     
+    attach_celery_task(job_id, task.id)
+
     return {
         "message": "Single-image copy-move analysis started",
         "analysis_id": analysis_id
@@ -651,7 +653,7 @@ def analyze_copy_move_cross(
     
     from app.tasks.copy_move_detection import detect_copy_move_cross
     
-    detect_copy_move_cross.delay(
+    task = detect_copy_move_cross.delay(
         analysis_id=analysis_id,
         source_image_id=request.source_image_id,
         target_image_id=request.target_image_id,
@@ -664,6 +666,8 @@ def analyze_copy_move_cross(
         job_id=job_id
     )
     
+    attach_celery_task(job_id, task.id)
+
     return {
         "message": "Cross-image copy-move analysis started",
         "analysis_id": analysis_id
@@ -727,7 +731,7 @@ def analyze_trufor(
     
     # Trigger task
     from app.tasks.trufor import detect_trufor
-    detect_trufor.delay(
+    task = detect_trufor.delay(
         analysis_id=analysis_id,
         image_id=request.image_id,
         user_id=user_id_str,
@@ -736,6 +740,8 @@ def analyze_trufor(
         job_id=job_id
     )
     
+    attach_celery_task(job_id, task.id)
+
     return {"message": "TruFor analysis started", "analysis_id": analysis_id}
 
 

@@ -7,7 +7,7 @@ from bson import ObjectId
 from typing import Dict
 from app.db.mongodb import get_documents_collection
 from app.schemas import JobType
-from app.services.job_logger import create_job_log
+from app.services.job_logger import attach_celery_task, create_job_log
 from app.tasks.watermark_removal import remove_watermark_from_document
 from app.config.settings import convert_host_path_to_container
 import logging
@@ -78,7 +78,7 @@ def initiate_watermark_removal(
     )
     
     # Create job log entry for the jobs dashboard (pending state)
-    doc_name = doc.get("original_filename", document_id)
+    doc_name = doc.get("filename", document_id)
     job_id = create_job_log(
         user_id=user_id,
         job_type=JobType.WATERMARK_REMOVAL,
@@ -95,6 +95,8 @@ def initiate_watermark_removal(
         job_id=job_id
     )
     
+    attach_celery_task(job_id, task.id)
+
     # Update document with task information
     documents_col.update_one(
         {"_id": doc_oid},

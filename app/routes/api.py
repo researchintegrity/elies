@@ -3,6 +3,8 @@ Frontend-specific API routes for dashboard, documents, and images
 Provides unified endpoints with pagination, filtering, and standardized responses
 """
 
+import re
+
 from fastapi import APIRouter, Query, HTTPException, Depends
 from datetime import datetime
 from typing import Optional
@@ -107,7 +109,7 @@ def list_documents(
     current_user: dict = Depends(get_current_user),
     page: int = Query(1, ge=1, description="Page number starting from 1"),
     per_page: int = Query(10, ge=1, le=100, description="Items per page"),
-    sort_by: str = Query("uploaded_date", description="Sort field: uploaded_date, filename"),
+    sort_by: str = Query("uploaded_date", pattern="^(uploaded_date|filename|file_size)$", description="Sort field: uploaded_date, filename, file_size"),
     order: str = Query("desc", description="Sort order: asc or desc"),
     search: Optional[str] = Query(None, description="Search in filename")
 ):
@@ -132,7 +134,7 @@ def list_documents(
         # Build filter
         filter_query = {"user_id": user_id}
         if search:
-            filter_query["filename"] = {"$regex": search, "$options": "i"}
+            filter_query["filename"] = {"$regex": re.escape(search), "$options": "i"}
         
         # Get total count
         total_items = collection.count_documents(filter_query)
@@ -295,7 +297,7 @@ def list_images(
     current_user: dict = Depends(get_current_user),
     page: int = Query(1, ge=1, description="Page number starting from 1"),
     per_page: int = Query(20, ge=1, le=100, description="Items per page"),
-    sort_by: str = Query("uploaded_date", description="Sort field"),
+    sort_by: str = Query("uploaded_date", pattern="^(uploaded_date|filename|file_size|source_type)$", description="Sort field"),
     order: str = Query("desc", description="Sort order: asc or desc"),
     source_type: Optional[str] = Query(None, description="Filter by source type: uploaded, extracted"),
     document_id: Optional[str] = Query(None, description="Filter by document ID"),
@@ -478,9 +480,9 @@ def delete_image(
     description="Search across documents and images"
 )
 def global_search(
-    query: str = Query(..., min_length=1, description="Search query"),
+    query: str = Query(..., min_length=1, max_length=200, description="Search query"),
     current_user: dict = Depends(get_current_user),
-    page: int = Query(1, ge=1, description="Page number starting from 1"),
+    page: int = Query(1, ge=1, le=1000, description="Page number starting from 1"),
     per_page: int = Query(20, ge=1, le=100, description="Items per page")
 ):
     """
@@ -497,46 +499,31 @@ def global_search(
     """
     try:
         user_id = str(current_user.get("_id"))
-        
-        # Search documents
+        name_filter = {"user_id": user_id, "filename": {"$regex": re.escape(query), "$options": "i"}}
+        projection = {"exif_metadata": 0, "extracted_images": 0}
+        skip = (page - 1) * per_page
+
+        # Fetch only the newest page*per_page matches of each kind, then merge
         doc_collection = get_documents_collection()
-        documents = list(doc_collection.find({
-            "user_id": user_id,
-            "filename": {"$regex": query, "$options": "i"}
-        }))
-        
-        # Search images
         img_collection = get_images_collection()
-        images = list(img_collection.find({
-            "user_id": user_id,
-            "filename": {"$regex": query, "$options": "i"}
-        }))
-        
-        # Combine results
+        documents = list(doc_collection.find(name_filter, projection).sort("uploaded_date", -1).limit(skip + per_page))
+        images = list(img_collection.find(name_filter, projection).sort("uploaded_date", -1).limit(skip + per_page))
+        total_items = doc_collection.count_documents(name_filter) + img_collection.count_documents(name_filter)
+
         results = []
         for doc in documents:
             doc["_id"] = str(doc["_id"])
             doc["type"] = "document"
             results.append(doc)
-        
         for img in images:
             img["_id"] = str(img["_id"])
             img["type"] = "image"
             results.append(img)
-        
-        # Sort by uploaded_date (newest first)
-        results.sort(key=lambda x: x.get("uploaded_date", datetime.utcnow()), reverse=True)
-        
-        # Paginate
-        total_items = len(results)
-        total_pages = (total_items + per_page - 1) // per_page
-        
-        if page > total_pages and total_pages > 0:
-            page = total_pages
-        
-        skip = (page - 1) * per_page
+
+        results.sort(key=lambda x: x.get("uploaded_date") or datetime.min, reverse=True)
         paginated_results = results[skip:skip + per_page]
-        
+        total_pages = (total_items + per_page - 1) // per_page
+
         return PaginatedResponse(
             success=True,
             message=f"Found {total_items} results for '{query}'",

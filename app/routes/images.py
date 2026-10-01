@@ -1,6 +1,7 @@
 """
 Image upload routes for extracted and user-uploaded image management
 """
+import re
 import logging
 import math
 import uuid
@@ -13,7 +14,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from fastapi.responses import FileResponse
 from PIL import Image
 
-from app.exceptions import StorageQuotaExceededError, ValidationError
+from app.exceptions import ELIESException, StorageQuotaExceededError, ValidationError
 from app.config.settings import (
     DEFAULT_THUMBNAIL_SIZE,
     MAX_BATCH_UPLOAD_FILES,
@@ -42,7 +43,7 @@ from app.services.image_service import (
     delete_image_and_artifacts,
     list_images as list_images_service,
 )
-from app.services.job_logger import create_job_log, complete_job
+from app.services.job_logger import attach_celery_task, create_job_log, complete_job
 from app.services.panel_extraction_service import (
     get_panel_extraction_status,
     get_panels_by_source_image,
@@ -221,7 +222,7 @@ def upload_images_batch(
 
     try:
         get_indexing_jobs_collection().insert_one(job_doc)
-        cbir_index_batch_with_progress.delay(
+        task = cbir_index_batch_with_progress.delay(
             job_id=job_id,
             user_id=user_id_str,
             image_items=uploaded_images,
@@ -237,6 +238,8 @@ def upload_images_batch(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to start indexing for uploaded images. Upload has been rolled back.",
         )
+
+    attach_celery_task(main_job_id, task.id)
 
     return BatchUploadResponse(
         job_id=job_id,
@@ -460,7 +463,7 @@ def get_all_image_ids(
             pass
     
     if search:
-        search_regex = {"$regex": search, "$options": "i"}
+        search_regex = {"$regex": re.escape(search), "$options": "i"}
         query["$or"] = [
             {"filename": search_regex},
             {"original_filename": search_regex}
@@ -836,10 +839,13 @@ def get_panel_extraction_status_endpoint(
             error=result.get("error")
         )
         
+    except ELIESException:
+        raise
     except Exception as e:
+        logger.error(f"Failed to get extraction status for task {task_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to get extraction status: {str(e)}"
+            detail="Failed to get extraction status"
         )
 
 

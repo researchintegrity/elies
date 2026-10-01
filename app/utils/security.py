@@ -94,6 +94,23 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
     return pwd_context.verify(plain_password, hashed_password)
 
 
+_dummy_password_hash: Optional[str] = None
+
+
+def verify_password_or_dummy(plain_password: str, hashed_password: Optional[str]) -> bool:
+    """
+    Verify a password, spending the same bcrypt time when the user does not
+    exist, so response timing does not reveal which usernames are registered.
+    """
+    global _dummy_password_hash
+    if hashed_password is None:
+        if _dummy_password_hash is None:
+            _dummy_password_hash = hash_password(secrets.token_urlsafe(16))
+        pwd_context.verify(plain_password, _dummy_password_hash)
+        return False
+    return verify_password(plain_password, hashed_password)
+
+
 def create_access_token(user: dict, expires_delta: Optional[timedelta] = None) -> str:
     """
     Create a JWT access token for a user document.

@@ -269,6 +269,19 @@ def complete_job(
     })
 
 
+def attach_celery_task(job_id: str, celery_task_id: str) -> None:
+    """Record which Celery task runs a job (used for ownership checks on task ids)."""
+    try:
+        get_jobs_collection().update_one({"_id": job_id}, {"$set": {"celery_task_id": celery_task_id}})
+    except Exception as e:
+        logger.error("Failed to attach Celery task %s to job %s: %s", celery_task_id, job_id, e)
+
+
+def find_job_by_celery_task(celery_task_id: str, user_id: str) -> Optional[Dict[str, Any]]:
+    """The job run by a Celery task, only if it belongs to ``user_id``."""
+    return get_jobs_collection().find_one({"celery_task_id": celery_task_id, "user_id": user_id})
+
+
 def get_job(job_id: str, user_id: str) -> Optional[Dict[str, Any]]:
     """
     Get a job by ID.
