@@ -105,7 +105,7 @@ def cbir_index_image(
     user_id: str,
     image_id: str,
     image_path: str,
-    labels: list = None
+    labels: list | None = None
 ):
     """
     Index a single image in the CBIR system asynchronously.
@@ -188,7 +188,7 @@ def cbir_index_batch_with_progress(
     job_id: str,
     user_id: str,
     image_items: list,
-    main_job_id: str = None
+    main_job_id: str | None = None
 ):
     """
     Index multiple images in batch with progress tracking.
@@ -212,7 +212,7 @@ def cbir_index_batch_with_progress(
     ]
 
     def update_job(status: str, processed: int, indexed: int, failed: int, current_step: str,
-                   errors: list = None, completed: bool = False):
+                   errors: list | None = None, completed: bool = False):
         update_doc = {
             "status": status,
             "processed_images": processed,
@@ -301,7 +301,7 @@ def cbir_search(
     query_image_id: str,
     query_image_path: str,
     top_k: int = 10,
-    labels: list = None
+    labels: list | None = None
 ):
     """
     Search for similar images asynchronously.

@@ -97,7 +97,7 @@ def _register_extracted_images(doc_id: str, user_id: str, extracted_files: List[
 
 
 @celery_app.task(bind=True, max_retries=CELERY_MAX_RETRIES, name="tasks.extract_images")
-def extract_images_from_document(self, doc_id: str, user_id: str, pdf_path: str, job_id: str = None):
+def extract_images_from_document(self, doc_id: str, user_id: str, pdf_path: str, job_id: str | None = None):
     """
     Extract images from a PDF document asynchronously.
 

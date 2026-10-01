@@ -27,6 +27,10 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(entry, default=str)
 
 
+class _EliesHandler(logging.StreamHandler):
+    """The root handler installed by configure_logging (so it is installed once)."""
+
+
 def configure_logging(level: str = "INFO", fmt: str = "text") -> None:
     """
     Configure the root logger once, at the level from LOG_LEVEL.
@@ -38,9 +42,8 @@ def configure_logging(level: str = "INFO", fmt: str = "text") -> None:
     numeric_level = logging.getLevelName(level.upper())
     if not isinstance(numeric_level, int):
         numeric_level = logging.INFO
-    if not any(getattr(h, "_elies", False) for h in root.handlers):
-        handler = logging.StreamHandler()
-        handler._elies = True
+    if not any(isinstance(h, _EliesHandler) for h in root.handlers):
+        handler = _EliesHandler()
         handler.addFilter(RequestIdFilter())
         handler.setFormatter(JsonFormatter() if fmt.lower() == "json" else logging.Formatter(TEXT_FORMAT))
         root.addHandler(handler)

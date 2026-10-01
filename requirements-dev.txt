@@ -7,4 +7,6 @@ httpx==0.28.1
 mongomock==4.3.0
 fakeredis==2.38.0
 ruff==0.6.9
+mypy==1.11.2
+types-requests==2.32.0.20240914
 pre-commit==3.8.0

@@ -12,7 +12,7 @@ import exiftool
 logger = logging.getLogger(__name__)
 
 
-def parse_pdf_extraction_filename(filename: str) -> Dict[str, Optional[any]]:
+def parse_pdf_extraction_filename(filename: str) -> Dict[str, Optional[Any]]:
     """
     Parse PDF extraction metadata from image filename.
     
@@ -62,7 +62,7 @@ def parse_pdf_extraction_filename(filename: str) -> Dict[str, Optional[any]]:
             'original_filename': 'p-4-1.png'
         }
     """
-    result = {
+    result: Dict[str, Optional[Any]] = {
         'page_number': None,
         'bbox': None,
         'extraction_mode': None,

@@ -37,7 +37,7 @@ MAX_IMAGE_FILE_SIZE = int(_env_number("IMAGE_MAX_SIZE_MB", 100) * _MB)
 # UTILITY FUNCTIONS
 # ============================================================================
 
-def format_bytes(bytes_value: int) -> str:
+def format_bytes(bytes_value: float) -> str:
     """
     Convert bytes to human-readable format
     

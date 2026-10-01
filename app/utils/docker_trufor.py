@@ -25,7 +25,7 @@ def run_trufor_detection_with_docker(
     analysis_id: str,
     user_id: str,
     image_path: str,
-    docker_image: str = None,
+    docker_image: str | None = None,
     save_noiseprint: bool = False,
     status_callback: Optional[Callable[[str], None]] = None
 ) -> Tuple[bool, str, Dict]:

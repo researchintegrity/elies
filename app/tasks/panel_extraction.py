@@ -28,7 +28,7 @@ def extract_panels_from_images(
     image_ids: List[str],
     user_id: str,
     image_paths: List[str],
-    job_id: str = None
+    job_id: str | None = None
 ):
     """
     Extract panels from images asynchronously

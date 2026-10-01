@@ -28,7 +28,8 @@ def _normalize_image_ids(image1_id: str, image2_id: str) -> Tuple[str, str]:
     Normalize image IDs by sorting them.
     This ensures (A, B) and (B, A) are stored as the same relationship.
     """
-    return tuple(sorted([image1_id, image2_id]))
+    first, second = sorted([image1_id, image2_id])
+    return first, second
 
 
 def create_relationship(

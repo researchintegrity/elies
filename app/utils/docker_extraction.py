@@ -21,7 +21,7 @@ def extract_images_with_docker(
     doc_id: str,
     user_id: str,
     pdf_file_path: str,
-    docker_image: str = None
+    docker_image: str | None = None
 ) -> Tuple[int, List[str], List[Dict]]:
     """
     Extract images from a PDF with the pdf-extractor container.

@@ -26,7 +26,7 @@ def extract_panels_with_docker(
     image_ids: List[str],
     user_id: str,
     image_paths: List[str],
-    docker_image: str = None
+    docker_image: str | None = None
 ) -> Tuple[bool, str, Dict]:
     """Extract panels from images using the panel-extractor container.
 

@@ -25,7 +25,7 @@ def ensure_directories_exist():
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def get_user_upload_path(user_id: str, subfolder: str = None) -> Path:
+def get_user_upload_path(user_id: str, subfolder: str | None = None) -> Path:
     """
     Get the upload path for a specific user
     
@@ -69,7 +69,7 @@ def get_extraction_output_path(user_id: str, doc_id: str) -> Path:
     return extraction_path
 
 
-def get_panel_output_path(user_id: str, doc_id: str = None) -> Path:
+def get_panel_output_path(user_id: str, doc_id: str | None = None) -> Path:
     """
     Get the path where extracted panels should be saved
     

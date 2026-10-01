@@ -79,12 +79,12 @@ def provenance_analysis_task(
     analysis_id: str,
     user_id: str,
     query_image_id: str,
-    search_image_ids: list = None,
+    search_image_ids: list | None = None,
     k: int = 10,
     q: int = 5,
     max_depth: int = 3,
     descriptor_type: str = "cv_rsift",
-    job_id: str = None
+    job_id: str | None = None
 ):
     """
     Run provenance analysis asynchronously and record image relationships

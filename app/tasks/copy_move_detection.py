@@ -22,7 +22,7 @@ METHOD_KEYPOINT = "keypoint"
 METHOD_DENSE = "dense"
 
 
-def _result_document(method: str, dense_method: int, results: dict, descriptor: str = None) -> dict:
+def _result_document(method: str, dense_method: int, results: dict, descriptor: str | None = None) -> dict:
     data = {
         "method": method,
         "timestamp": datetime.now(timezone.utc),
@@ -45,7 +45,7 @@ def detect_copy_move(
     image_path: str,
     method: str = METHOD_KEYPOINT,
     dense_method: int = 2,
-    job_id: str = None
+    job_id: str | None = None
 ):
     """
     Run copy-move detection on an image asynchronously.
@@ -91,7 +91,7 @@ def detect_copy_move_cross(
     method: str = METHOD_KEYPOINT,
     dense_method: int = 2,
     descriptor: str = "cv_rsift",
-    job_id: str = None
+    job_id: str | None = None
 ):
     """
     Run cross-image copy-move detection asynchronously.

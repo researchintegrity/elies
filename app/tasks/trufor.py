@@ -22,7 +22,7 @@ def detect_trufor(
     user_id: str,
     image_path: str,
     save_noiseprint: bool = False,
-    job_id: str = None
+    job_id: str | None = None
 ):
     """
     Run TruFor detection on an image asynchronously.

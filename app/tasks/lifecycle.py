@@ -84,11 +84,11 @@ class TrackedJob:
 
     def complete(self, results: Optional[Dict[str, Any]] = None, output_data: Optional[Dict[str, Any]] = None,
                  partial_errors: Optional[list] = None) -> None:
-        fields = {"status": AnalysisStatus.COMPLETED, "status_message": "Completed"}
+        fields: Dict[str, Any] = {"status": AnalysisStatus.COMPLETED, "status_message": "Completed"}
         if results is not None:
             fields["results"] = results
         self._update_analysis(fields)
-        output = {"analysis_id": self.analysis_id} if self.analysis_id else {}
+        output: Dict[str, Any] = {"analysis_id": self.analysis_id} if self.analysis_id else {}
         output.update(output_data or {})
         status = JobStatus.PARTIAL if partial_errors else JobStatus.COMPLETED
         if self.job_id:
@@ -149,7 +149,7 @@ def run_analysis(task, job: TrackedJob, start_message: str,
         handle_task_exception(task, exc, job)
 
     if success:
-        job.complete(results, output_data(results) if output_data else None)
+        job.complete(results, output_data(results or {}) if output_data else None)
         return {"status": "completed", "results": results}
     job.fail(message)
     return {"status": "failed", "error": message}

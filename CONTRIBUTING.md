@@ -27,6 +27,7 @@ Before opening a pull request:
 
 ```bash
 ruff check .
+mypy
 pytest -m "not integration and not e2e"
 python tools/generate_api_reference.py   # if you changed routes or their docstrings
 ```
@@ -41,7 +42,9 @@ CI runs the same checks on every pull request.
 - Add tests for bug fixes and new behaviour. Unit tests go in `tests/unit/`
   and must not need running services (see
   [docs/development/testing.md](docs/development/testing.md)).
-- Follow the existing code style: ruff-clean, type hints on new functions,
+- Follow the existing code style: ruff-clean, type hints on new functions
+  (mypy checks every module except the older ones listed in `pyproject.toml`;
+  remove a module from that list when you fix its type errors),
   log with `%s` arguments (not f-strings), domain errors from `app/exceptions.py`
   instead of `HTTPException` in services.
 - Timestamps are timezone-aware UTC (`datetime.now(timezone.utc)`).

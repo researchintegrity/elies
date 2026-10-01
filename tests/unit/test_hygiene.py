@@ -78,3 +78,23 @@ def test_type_updates_return_the_full_image(client, alice):
     assert body["image_type"] == ["figure"]
     assert body["user_storage_used"] == len(PNG_BYTES)
     assert body["is_flagged"] is True
+
+
+def test_panel_listing_reports_the_real_storage_usage(client, alice):
+    from bson import ObjectId
+
+    from app.db.mongodb import get_images_collection, get_users_collection
+    from tests.unit.conftest import PNG_BYTES
+
+    image = client.post("/images/upload", headers=alice.headers,
+                        files={"file": ("a.png", PNG_BYTES, "image/png")}).json()
+    get_images_collection().insert_one({
+        "user_id": alice.id, "source_type": "panel", "source_image_id": image["_id"],
+        "filename": "p.png", "file_path": "/x/p.png", "file_size": 10, "panel_type": "Graphs",
+        "uploaded_date": image["uploaded_date"],
+    })
+    get_users_collection().update_one({"_id": ObjectId(alice.id)}, {"$set": {"storage_used_bytes": 12345}})
+
+    panels = client.get(f"/images/{image['_id']}/panels", headers=alice.headers).json()
+    assert len(panels) == 1 and panels[0]["panel_type"] == "Graphs"
+    assert panels[0]["user_storage_used"] == 12345

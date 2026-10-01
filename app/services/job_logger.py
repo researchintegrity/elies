@@ -156,7 +156,7 @@ def create_job_log(
     jobs_col = get_jobs_collection()
     
     now = datetime.now(timezone.utc)
-    job_doc = {
+    job_doc: Dict[str, Any] = {
         "_id": job_id,
         "user_id": user_id,
         "job_type": job_type.value,

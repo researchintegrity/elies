@@ -834,25 +834,8 @@ def get_panels_from_image(
         user_id=user_id
     )
     
-    # Convert to response format
-    response_panels = []
-    for panel_doc in panels:
-        response_panels.append(ImageResponse(
-            _id=str(panel_doc.get("_id")),
-            user_id=panel_doc.get("user_id"),
-            filename=panel_doc.get("filename"),
-            file_path=panel_doc.get("file_path"),
-            file_size=panel_doc.get("file_size"),
-            source_type=panel_doc.get("source_type"),
-            document_id=panel_doc.get("document_id"),
-            source_image_id=panel_doc.get("source_image_id"),
-            panel_id=panel_doc.get("panel_id"),
-            panel_type=panel_doc.get("panel_type"),
-            bbox=panel_doc.get("bbox"),
-            uploaded_date=panel_doc.get("uploaded_date")
-        ))
-    
-    return response_panels
+    # Panels already carry the owner's storage usage (user_storage_*)
+    return [ImageResponse(**panel_doc) for panel_doc in panels]
 
 
 # ============================================================================

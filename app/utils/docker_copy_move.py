@@ -31,11 +31,11 @@ def run_copy_move_detection_with_docker(
     analysis_type: str,
     user_id: str,
     image_path: str,
-    target_image_path: str = None,
+    target_image_path: str | None = None,
     method: str = METHOD_KEYPOINT,
     dense_method: int = 2,
     descriptor: str = "cv_rsift",
-    docker_image: str = None
+    docker_image: str | None = None
 ) -> Tuple[bool, str, Dict]:
     """Run copy-move detection on an image (or image pair) using Docker.
 

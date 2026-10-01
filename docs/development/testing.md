@@ -12,15 +12,16 @@ directory, and both are set before the application is imported.
 | Integration | `@pytest.mark.integration` | a MongoDB on `MONGODB_URL` (and Redis for some) | `pytest -m "integration and not e2e"` |
 | End-to-end | `tests/*_e2e.py` (marked `e2e` automatically) | the whole stack running with the tool images | `pytest -m e2e` |
 
-CI (`.github/workflows/ci.yml`) runs ruff and the unit tests with coverage on
-every push and pull request, and the integration tests against MongoDB and
-Redis service containers.
+CI (`.github/workflows/ci.yml`) runs ruff, mypy and the unit tests with
+coverage on every push and pull request, and the integration tests against
+MongoDB and Redis service containers.
 
 ## Running
 
 ```bash
 pip install -r requirements-dev.txt
 ruff check .
+mypy
 pytest -m "not integration and not e2e" --cov=app --cov-report=term
 ```
 

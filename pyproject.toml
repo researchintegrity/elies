@@ -24,3 +24,35 @@ exclude_lines = [
     "if __name__ == .__main__.:",
     "if TYPE_CHECKING:",
 ]
+
+[tool.mypy]
+# Type checking is introduced gradually: the whole app is checked, except
+# the modules listed below, which predate it. Remove a module from the list
+# once its errors are fixed; new modules must type-check.
+python_version = "3.12"
+files = ["app"]
+ignore_missing_imports = true
+follow_imports = "silent"
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+[[tool.mypy.overrides]]
+module = [
+    "Found 65 errors in 19 files (checked 67 source files)",
+    "app.routes.admin",
+    "app.routes.analyses",
+    "app.routes.api",
+    "app.routes.cbir",
+    "app.routes.dual_annotations",
+    "app.routes.images",
+    "app.routes.jobs",
+    "app.routes.single_annotations",
+    "app.routes.users",
+    "app.services.cbir_service",
+    "app.services.image_service",
+    "app.services.provenance_service",
+    "app.tasks.panel_extraction",
+    "app.tasks.watermark_removal",
+    "app.utils.docker_cbir",
+]
+ignore_errors = true

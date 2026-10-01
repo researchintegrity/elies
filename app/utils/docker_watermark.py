@@ -23,7 +23,7 @@ def remove_watermark_with_docker(
     user_id: str,
     pdf_file_path: str,
     aggressiveness_mode: int = 2,
-    docker_image: str = None,
+    docker_image: str | None = None,
     output_id: Optional[str] = None,
 ) -> Tuple[bool, str, Dict]:
     """Remove watermarks from a PDF using the pdf-watermark-removal container.

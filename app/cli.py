@@ -23,7 +23,7 @@ from app.schemas import UserRegister
 from app.utils.security import generate_secure_password, hash_password, revoke_user_tokens
 
 
-def create_admin(username: str, email: str, password: str, full_name: str = None,
+def create_admin(username: str, email: str, password: str, full_name: str | None = None,
                  must_change_password: bool = False) -> dict:
     """Create an active administrator account. Raises ValueError on invalid input or duplicates."""
     try:

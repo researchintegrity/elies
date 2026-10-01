@@ -28,7 +28,7 @@ def remove_watermark_from_document(
     user_id: str,
     pdf_path: str,
     aggressiveness_mode: int = 1,
-    job_id: str = None
+    job_id: str | None = None
 ):
     """
     Remove watermark from PDF document asynchronously
