@@ -71,7 +71,6 @@ jobs:
     env:
       MONGODB_URL: mongodb://localhost:27017
       REDIS_HOST: localhost
-    continue-on-error: true  # informational until the legacy integration tests are migrated
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
