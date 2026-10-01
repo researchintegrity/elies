@@ -4,7 +4,7 @@ from pathlib import Path
 
 from app.main import app
 
-SCRIPT = Path(__file__).resolve().parents[2] / "scripts" / "generate_api_reference.py"
+SCRIPT = Path(__file__).resolve().parents[2] / "tools" / "generate_api_reference.py"
 
 
 def _generator():
@@ -17,5 +17,5 @@ def _generator():
 def test_endpoint_reference_is_up_to_date():
     generator = _generator()
     assert generator.OUTPUT.read_text() == generator.render(app.openapi()), (
-        "docs/api/endpoints.md is out of date: run python scripts/generate_api_reference.py"
+        "docs/api/endpoints.md is out of date: run python tools/generate_api_reference.py"
     )

@@ -7,7 +7,7 @@ complete:
 - the **interactive reference** served by the API: `/docs` (Swagger UI) and
   `/redoc`, with every request and response schema;
 - the **endpoint list** in [docs/api/endpoints.md](docs/api/endpoints.md),
-  regenerated with `python scripts/generate_api_reference.py` (a unit test
+  regenerated with `python tools/generate_api_reference.py` (a unit test
   fails when it is out of date).
 
 All paths below are relative to the API root (`http://localhost:8000` by

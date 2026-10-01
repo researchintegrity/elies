@@ -46,5 +46,5 @@ Celery tasks can be run in-process with `task.run(...)` after
 ## API reference
 
 `docs/api/endpoints.md` is generated from the OpenAPI schema. After changing
-routes or their docstrings, run `python scripts/generate_api_reference.py`;
+routes or their docstrings, run `python tools/generate_api_reference.py`;
 `tests/unit/test_api_docs.py` fails while it is out of date.

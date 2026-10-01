@@ -28,7 +28,7 @@ Before opening a pull request:
 ```bash
 ruff check .
 pytest -m "not integration and not e2e"
-python scripts/generate_api_reference.py   # if you changed routes or their docstrings
+python tools/generate_api_reference.py   # if you changed routes or their docstrings
 ```
 
 CI runs the same checks on every pull request.
