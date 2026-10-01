@@ -28,6 +28,7 @@ from app.utils.security import (
     get_current_admin_user,
     hash_password,
     generate_secure_password,
+    revoke_user_tokens,
 )
 from app.db.mongodb import get_users_collection
 
@@ -266,6 +267,9 @@ async def update_user_role(
         return_document=True
     )
     
+    # Existing tokens were issued for the old roles
+    revoke_user_tokens(object_id)
+
     old_roles = target_user.get("roles", ["user"])
     logger.info(
         f"Admin {current_admin['username']} updated roles for user {target_user['username']}: "
@@ -343,6 +347,8 @@ async def reset_user_password(
         }
     )
     
+    revoke_user_tokens(object_id)
+
     logger.info(
         f"Admin {current_admin['username']} reset password for user {target_user['username']} "
         f"(generated: {generated})"
@@ -415,6 +421,9 @@ async def update_user_status(
         return_document=True
     )
     
+    if not status_update.is_active:
+        revoke_user_tokens(object_id)
+
     # Ensure roles field exists
     if "roles" not in result:
         result["roles"] = ["user"]

@@ -40,7 +40,7 @@ from app.utils.file_storage import (
     update_user_storage_in_db,
 )
 from app.utils.docker_cbir import check_cbir_health
-from app.utils.security import get_current_user
+from app.utils.security import get_current_user, get_current_user_media
 
 logger = logging.getLogger(__name__)
 _warned_deprecated = False
@@ -277,7 +277,7 @@ async def get_document_images(
 @router.get("/{doc_id}/download")
 async def download_document(
     doc_id: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_media)
 ):
     """
     Download a document (PDF file)

@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from app.db.mongodb import db_connection
 from app.exceptions import ELIESException
+from app.utils.security import RedactTokenFilter
 from app.routes import (
     admin,
     analyses,
@@ -26,6 +27,9 @@ from app.routes import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Media URLs carry ?token=...; keep bearer tokens out of the access log
+logging.getLogger("uvicorn.access").addFilter(RedactTokenFilter())
 
 # Create FastAPI app
 app = FastAPI(

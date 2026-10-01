@@ -10,7 +10,7 @@ services:
       MONGODB_URL: mongodb://mongo:27017
       REDIS_HOST: redis
       REDIS_PORT: 6379
-      JWT_SECRET: ${JWT_SECRET}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (see .env.example)}
       JWT_EXPIRATION_HOURS: 24
       CONTAINER_WORKSPACE_PATH: ${CONTAINER_WORKSPACE_PATH}
       HOST_WORKSPACE_PATH: ${HOST_WORKSPACE_PATH}
@@ -74,7 +74,7 @@ services:
       REDIS_PORT: 6379
       CONTAINER_WORKSPACE_PATH: ${CONTAINER_WORKSPACE_PATH}
       HOST_WORKSPACE_PATH: ${HOST_WORKSPACE_PATH}
-      JWT_SECRET: ${JWT_SECRET}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (see .env.example)}
       TRUFOR_USE_GPU: "false"
       # CBIR service configuration (use container name when running in Docker)
       CBIR_SERVICE_HOST: ${CBIR_SERVICE_HOST:-cbir-service}
@@ -103,7 +103,7 @@ services:
       REDIS_PORT: 6379
       CONTAINER_WORKSPACE_PATH: ${CONTAINER_WORKSPACE_PATH}
       HOST_WORKSPACE_PATH: ${HOST_WORKSPACE_PATH}
-      JWT_SECRET: ${JWT_SECRET}
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (see .env.example)}
       TRUFOR_USE_GPU: "false"
       # CBIR service configuration (use container name when running in Docker)
       CBIR_SERVICE_HOST: ${CBIR_SERVICE_HOST:-cbir-service}

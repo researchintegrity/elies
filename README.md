@@ -52,6 +52,8 @@ git submodule update --init --remote # ensure latest submodule versions
 cp .env.example .env
 # Edit .env to set the HOST_WORKSPACE_PATH
 # >> HOST_WORKSPACE_PATH=<path/to-current-dir>/elies/system_modules/elies-frontend/workspace
+# Set a JWT signing secret (required; the API will not start without one):
+# >> JWT_SECRET=<output of: python -c "import secrets; print(secrets.token_urlsafe(48))">
 ```
 
 #### 2. Build the tools

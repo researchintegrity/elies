@@ -57,7 +57,7 @@ from app.utils.file_storage import (
     get_thumbnail_path,
     update_user_storage_in_db,
 )
-from app.utils.security import get_current_user
+from app.utils.security import get_current_user, get_current_user_media
 
 logger = logging.getLogger(__name__)
 
@@ -508,7 +508,7 @@ async def get_image(
 @router.get("/{image_id}/download")
 async def download_image(
     image_id: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_media)
 ):
     """
     Download an image file
@@ -561,7 +561,7 @@ async def download_image(
 @router.get("/{image_id}/thumbnail")
 async def get_image_thumbnail(
     image_id: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_media)
 ):
     """
     Get a thumbnail version of an image

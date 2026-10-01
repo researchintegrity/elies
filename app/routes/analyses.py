@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Query, UploadFile, File, Form
 from fastapi.responses import FileResponse
-from app.utils.security import get_current_user
+from app.utils.security import get_current_user, get_current_user_media
 from app.db.mongodb import get_analyses_collection, get_images_collection
 from app.schemas import (
     AnalysisResponse,
@@ -400,7 +400,7 @@ async def delete_analysis(
 async def download_analysis_result(
     analysis_id: str,
     result_type: str,
-    current_user: dict = Depends(get_current_user)
+    current_user: dict = Depends(get_current_user_media)
 ):
     """
     Download an analysis result image file.

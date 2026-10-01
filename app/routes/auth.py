@@ -66,7 +66,7 @@ async def register(user_data: UserRegister) -> dict:
         created_user = collection.find_one({"_id": result.inserted_id})
         
         # Create token
-        access_token = create_access_token(username=user_data.username)
+        access_token = create_access_token(created_user)
         expires_delta = timedelta(hours=JWT_EXPIRATION_HOURS)
         
         return {
@@ -125,7 +125,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends()) -> dict:
         user["roles"] = ["user"]
     
     # Create token
-    access_token = create_access_token(username=user["username"])
+    access_token = create_access_token(user)
     expires_delta = timedelta(hours=JWT_EXPIRATION_HOURS)
     
     return {
