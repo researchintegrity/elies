@@ -38,3 +38,21 @@ def mark_unavailable(error: Exception, purpose: str) -> None:
     logger.warning("Redis unavailable for %s (%s); using the in-process fallback for %ss",
                    purpose, error, RETRY_AFTER)
     _unavailable_until = time.monotonic() + RETRY_AFTER
+
+
+def ping() -> bool:
+    """
+    Check Redis now, ignoring the back-off window (used by readiness checks).
+    A successful ping ends the back-off, so the other features recover at once.
+    """
+    global _client, _unavailable_until
+    if _client is None:
+        _client = redis.Redis.from_url(JOB_EVENTS_REDIS_URL, socket_connect_timeout=1, socket_timeout=2)
+    try:
+        ok = bool(_client.ping())
+    except redis.RedisError as e:
+        logger.warning("Readiness: Redis unavailable: %s", e)
+        return False
+    if ok:
+        _unavailable_until = 0.0
+    return ok

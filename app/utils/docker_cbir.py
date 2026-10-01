@@ -9,6 +9,7 @@ import time
 
 import requests
 from typing import Tuple, Dict, List, Optional, Any
+from app.exceptions import TransientError
 from app.config.settings import (
     convert_host_path_to_container,
     CBIR_HEALTH_CACHE_SECONDS,
@@ -324,10 +325,14 @@ def delete_image_from_index(
         
         if response.status_code == 200:
             return True, "Image deleted from index"
-        else:
-            error_detail = response.json().get("detail", response.text)
-            return False, f"Delete failed: {error_detail}"
-            
+        if response.status_code >= 500:
+            raise TransientError(f"CBIR delete failed with HTTP {response.status_code}")
+        error_detail = response.json().get("detail", response.text)
+        return False, f"Delete failed: {error_detail}"
+
+    except (requests.ConnectionError, requests.Timeout) as e:
+        # Deletion must not be lost: let the Celery task retry
+        raise TransientError(f"CBIR service unreachable: {e}") from e
     except requests.RequestException as e:
         logger.error("CBIR service request failed: %s", e)
         return False, f"CBIR service error: {str(e)}"
@@ -359,10 +364,14 @@ def delete_user_data(user_id: str) -> Tuple[bool, str]:
         
         if response.status_code == 200:
             return True, f"Deleted all data for user {user_id}"
-        else:
-            error_detail = response.json().get("detail", response.text)
-            return False, f"User data delete failed: {error_detail}"
-            
+        if response.status_code >= 500:
+            raise TransientError(f"CBIR user data delete failed with HTTP {response.status_code}")
+        error_detail = response.json().get("detail", response.text)
+        return False, f"User data delete failed: {error_detail}"
+
+    except (requests.ConnectionError, requests.Timeout) as e:
+        # Deletion must not be lost: let the Celery task retry
+        raise TransientError(f"CBIR service unreachable: {e}") from e
     except requests.RequestException as e:
         logger.error("CBIR service request failed: %s", e)
         return False, f"CBIR service error: {str(e)}"

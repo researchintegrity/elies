@@ -145,9 +145,10 @@ def build_image_query(
         if date_query:
             query["uploaded_date"] = date_query
     
-    # Search filter - case-insensitive regex on filename
+    # Search filter - case-insensitive, on the display name and the stored name
     if search:
-        query["filename"] = {"$regex": re.escape(search), "$options": "i"}
+        pattern = {"$regex": re.escape(search), "$options": "i"}
+        query.setdefault("$and", []).append({"$or": [{"original_filename": pattern}, {"filename": pattern}]})
 
     # Linked image filter (Dual Annotations)
     if linked_to_image_id:

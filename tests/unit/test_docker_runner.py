@@ -27,6 +27,11 @@ FAKE_DOCKER = textwrap.dedent(f"""\
             sys.stderr.flush()
             print("[STATUS] loading model", flush=True)
             print("[STATUS] done", flush=True)
+        elif mode == "binary":
+            sys.stdout.buffer.write(b"caf\\xe9 \\xff\\xfe progress\\n")
+            sys.stdout.flush()
+            sys.stderr.write("e" * 300000)
+            print("ok", flush=True)
         elif mode == "hang":
             time.sleep(30)
         elif mode == "nodaemon":
@@ -116,3 +121,12 @@ def test_orphans_from_this_worker_are_killed(fake_docker):
     log = fake_docker.read_text()
     assert f"label=elies.worker={docker_runner.WORKER_LABEL}" in log
     assert "kill abc123" in log and "kill def456" in log
+
+
+def test_non_utf8_tool_output_does_not_stall_the_run(fake_docker, monkeypatch):
+    monkeypatch.setenv("FAKE_DOCKER_MODE", "binary")
+    started = time.monotonic()
+    run = run_tool_container("tool:latest", [], [], timeout=20, purpose="test")
+    assert run.ok and not run.timed_out
+    assert time.monotonic() - started < 10
+    assert "\ufffd" in run.stdout and "ok" in run.stdout

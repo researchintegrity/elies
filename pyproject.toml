@@ -38,7 +38,6 @@ warn_redundant_casts = true
 
 [[tool.mypy.overrides]]
 module = [
-    "Found 65 errors in 19 files (checked 67 source files)",
     "app.routes.admin",
     "app.routes.analyses",
     "app.routes.api",

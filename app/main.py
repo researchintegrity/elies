@@ -160,14 +160,9 @@ def _database_ready() -> bool:
 
 
 def _redis_ready() -> bool:
-    from app.utils.redis_client import get_redis
+    from app.utils.redis_client import ping
 
-    try:
-        client = get_redis()
-        return bool(client and client.ping())
-    except Exception as e:
-        logger.warning("Readiness: Redis unavailable: %s", e)
-        return False
+    return ping()
 
 
 @app.get("/health/live", tags=["General"])

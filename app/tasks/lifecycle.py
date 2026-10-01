@@ -108,9 +108,14 @@ def handle_task_exception(task, exc: BaseException, job: TrackedJob,
     original exception after the job has been marked failed.
     """
     def fail(message: str) -> None:
-        job.fail(message)
-        if on_final_failure:
-            on_final_failure(message)
+        # Best effort: when MongoDB itself is down these writes fail too, and
+        # the stale-job reaper marks the job failed later.
+        try:
+            job.fail(message)
+            if on_final_failure:
+                on_final_failure(message)
+        except Exception as e:
+            logger.error("Could not record the failure of %s: %s", task.name, e)
 
     if isinstance(exc, SoftTimeLimitExceeded):
         fail("The task exceeded its time limit")
@@ -120,7 +125,10 @@ def handle_task_exception(task, exc: BaseException, job: TrackedJob,
         if task.request.retries < task.max_retries:
             countdown = retry_delay(task.request.retries)
             logger.warning("Transient error in %s (%s); retrying in %ss", task.name, exc, countdown)
-            job.progress(None, f"Temporarily unavailable, retrying in {countdown}s")
+            try:
+                job.progress(None, f"Temporarily unavailable, retrying in {countdown}s")
+            except Exception as e:  # e.g. MongoDB is the service that is down
+                logger.warning("Could not record the retry of %s: %s", task.name, e)
             raise task.retry(exc=exc, countdown=countdown)
         fail(f"A required service is unavailable: {exc}")
         raise exc

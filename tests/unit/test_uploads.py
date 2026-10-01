@@ -113,3 +113,13 @@ def test_batch_rollback_removes_new_images_when_queueing_fails(client, alice, mo
     assert response.status_code == 500
     assert get_images_collection().count_documents({}) == 0
     assert _files_under(UPLOAD_DIR / alice.id / "images") == []
+
+
+def test_search_matches_the_original_file_name(client, alice):
+    response = client.post("/images/upload", headers=alice.headers,
+                           files={"file": ("western_blot_3.png", PNG_BYTES, "image/png")})
+    assert response.status_code == 201
+    listed = client.get("/images", headers=alice.headers, params={"search": "western"}).json()
+    assert [img["original_filename"] for img in listed["items"]] == ["western_blot_3.png"]
+    ids = client.get("/images/ids", headers=alice.headers, params={"search": "WESTERN"}).json()
+    assert ids["ids"] == [response.json()["_id"]]

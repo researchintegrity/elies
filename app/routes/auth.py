@@ -1,7 +1,6 @@
 """
 Authentication routes for user registration and login
 """
-import re
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -18,6 +17,7 @@ from app.db.mongodb import get_users_collection
 from app.schemas import TokenResponse, UserRegister, UserResponse
 from app.utils.rate_limit import SlidingWindowLimiter
 from app.utils.security import (
+    email_query,
     JWT_EXPIRATION_HOURS,
     create_access_token,
     hash_password,
@@ -42,11 +42,6 @@ def _too_many_requests(retry_after: int, what: str) -> HTTPException:
         detail=f"Too many {what}. Try again in {retry_after} seconds.",
         headers={"Retry-After": str(retry_after)},
     )
-
-
-def email_query(email: str) -> dict:
-    """Case-insensitive exact match on email (older records may be mixed case)."""
-    return {"$regex": f"^{re.escape(email)}$", "$options": "i"}
 
 
 def _token_response(user: dict) -> dict:

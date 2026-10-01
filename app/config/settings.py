@@ -11,6 +11,11 @@ import os
 from pathlib import Path
 from typing import List, Union
 
+from dotenv import load_dotenv
+
+# Read .env before any setting below (real environment variables take precedence)
+load_dotenv()
+
 
 def _env_int(name: str, default: int) -> int:
     value = os.getenv(name)

@@ -301,3 +301,47 @@ def test_stream_falls_back_to_in_process_events_without_redis(mock_db, monkeypat
         return chunk
 
     assert '"event": "job_completed"' in asyncio.run(scenario())
+
+
+def test_retry_is_scheduled_even_if_mongodb_is_the_service_that_is_down(mock_db, monkeypatch):
+    from pymongo.errors import ServerSelectionTimeoutError
+
+    from app.tasks.lifecycle import TrackedJob, handle_task_exception
+
+    class Job(TrackedJob):
+        def progress(self, percent, message):
+            raise ServerSelectionTimeoutError("no servers")
+
+    task = trufor_task.detect_trufor
+    task.push_request(retries=0, id="celery-task-1", called_directly=False)
+    try:
+        with pytest.raises(Retry):
+            handle_task_exception(task, ServerSelectionTimeoutError("no servers"), Job("u1", None, None))
+    finally:
+        task.pop_request()
+
+
+def test_cbir_deletion_is_retried_while_cbir_is_unreachable(mock_db, monkeypatch):
+    import requests
+
+    import app.utils.docker_cbir as docker_cbir
+    from app.exceptions import TransientError
+
+    def unreachable(*args, **kwargs):
+        raise requests.ConnectionError("refused")
+
+    monkeypatch.setattr(docker_cbir.requests, "post", unreachable)
+    with pytest.raises(TransientError):
+        docker_cbir.delete_user_data("u1")
+    with pytest.raises(TransientError):
+        docker_cbir.delete_image_from_index("u1", str(UPLOAD_DIR / "u1" / "x.png"))
+
+    import app.tasks.cbir as cbir_tasks
+
+    task = cbir_tasks.cbir_delete_user_data
+    task.push_request(retries=0, id="celery-task-2", called_directly=False)
+    try:
+        with pytest.raises(Retry):
+            task.run(user_id="u1")
+    finally:
+        task.pop_request()

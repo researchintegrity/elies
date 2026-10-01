@@ -16,11 +16,15 @@ import sys
 from datetime import datetime, timezone
 
 from pydantic import ValidationError as PydanticValidationError
+from pymongo.errors import DuplicateKeyError
 
 from app.config.storage_quota import DEFAULT_USER_STORAGE_QUOTA
 from app.db.mongodb import get_users_collection
 from app.schemas import UserRegister
-from app.utils.security import generate_secure_password, hash_password, revoke_user_tokens
+from app.utils.security import email_query, generate_secure_password, hash_password, revoke_user_tokens
+
+
+DUPLICATE_USER = "A user with this username or email already exists (use 'promote' instead)"
 
 
 def create_admin(username: str, email: str, password: str, full_name: str | None = None,
@@ -33,8 +37,8 @@ def create_admin(username: str, email: str, password: str, full_name: str | None
 
     users = get_users_collection()
     email = data.email.lower()
-    if users.find_one({"$or": [{"username": data.username}, {"email": email}]}):
-        raise ValueError("A user with this username or email already exists (use 'promote' instead)")
+    if users.find_one({"$or": [{"username": data.username}, {"email": email_query(email)}]}):
+        raise ValueError(DUPLICATE_USER)
 
     now = datetime.now(timezone.utc)
     user_doc = {
@@ -52,7 +56,10 @@ def create_admin(username: str, email: str, password: str, full_name: str | None
         "updated_at": now,
         "last_login_at": None,
     }
-    user_doc["_id"] = users.insert_one(user_doc).inserted_id
+    try:
+        user_doc["_id"] = users.insert_one(user_doc).inserted_id
+    except DuplicateKeyError as exc:  # created concurrently
+        raise ValueError(DUPLICATE_USER) from exc
     return user_doc
 
 

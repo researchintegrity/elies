@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from app.db.mongodb import get_users_collection
-from app.routes.auth import _token_response, email_query
+from app.routes.auth import _token_response
+from app.utils.security import email_query
 from app.services.deletion_service import request_account_deletion
 from app.schemas import (
     MessageResponse,

@@ -87,3 +87,12 @@ def test_admin_actions_are_audited(client, alice, bob):
     listing = client.get("/admin/audit-log", headers=admin, params={"target_user_id": bob.id}).json()
     assert listing["total"] == 2 and listing["items"][0]["action"] == "deactivated"
     assert client.get("/admin/audit-log", headers=bob.headers).status_code in (401, 403)
+
+
+def test_readiness_pings_redis_even_during_the_back_off(client, monkeypatch):
+    from app.utils import redis_client
+
+    # A feature hit a Redis error a moment ago, but Redis answers now
+    monkeypatch.setattr(redis_client, "_unavailable_until", float("inf"))
+    assert client.get("/health/ready").status_code == 200
+    assert redis_client.get_redis() is not None  # the successful ping ended the back-off

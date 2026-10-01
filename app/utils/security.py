@@ -90,6 +90,11 @@ def _password_bytes(password: str) -> bytes:
     return password.encode("utf-8")[:PASSWORD_MAX_BYTES]
 
 
+def email_query(email: str) -> dict:
+    """Case-insensitive exact match on email (older records may be mixed case)."""
+    return {"$regex": f"^{re.escape(email)}$", "$options": "i"}
+
+
 def hash_password(password: str) -> str:
     """Hash a password using bcrypt"""
     return bcrypt.hashpw(_password_bytes(password), bcrypt.gensalt(rounds=BCRYPT_ROUNDS)).decode("ascii")

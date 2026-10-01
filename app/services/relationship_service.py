@@ -272,7 +272,17 @@ def get_relationship_graph(
         )
         for rel in rels:
             a, b = rel["image1_id"], rel["image2_id"]
-            if keep_edges:
+            for current, other in ((a, b), (b, a)):
+                if current not in frontier_set or other in depth_of:
+                    continue
+                if len(depth_of) >= max_nodes:
+                    truncated = True
+                    continue
+                depth_of[other] = depth + 1
+                next_frontier.append(other)
+            # Only edges between explored nodes: a neighbour left out by the
+            # node cap must not appear as an edge endpoint
+            if keep_edges and a in depth_of and b in depth_of:
                 edge_key = (a, b) if a <= b else (b, a)
                 edges.setdefault(edge_key, {
                     "source": edge_key[0],
@@ -282,14 +292,6 @@ def get_relationship_graph(
                     "id": str(rel["_id"]),
                     "is_mst_edge": False,  # Updated after MST computation
                 })
-            for current, other in ((a, b), (b, a)):
-                if current not in frontier_set or other in depth_of:
-                    continue
-                if len(depth_of) >= max_nodes:
-                    truncated = True
-                    continue
-                depth_of[other] = depth + 1
-                next_frontier.append(other)
         frontier, depth = next_frontier, depth + 1
 
     node_ids = [i for i, d in depth_of.items() if in_graph(d)]

@@ -301,6 +301,11 @@ def test_graph_exploration_is_capped(mock_db):
 
     assert graph["total_nodes_count"] == 5 and graph["truncated"] is True
     assert len(graph["nodes"]) == 5
+    # No edge may point at an image left out by the cap, and the MST spans every node
+    node_ids = {n["id"] for n in graph["nodes"]}
+    assert len(graph["edges"]) == 4
+    assert all(e["source"] in node_ids and e["target"] in node_ids for e in graph["edges"])
+    assert len(graph["mst_edges"]) == 4
 
 
 def test_graph_endpoint_reports_truncation(client, alice):

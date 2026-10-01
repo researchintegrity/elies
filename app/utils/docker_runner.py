@@ -160,7 +160,8 @@ def run_tool_container(
 
     started = time.monotonic()
     try:
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1)
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, bufsize=1,
+                                   encoding="utf-8", errors="replace")
     except OSError as e:
         raise DockerUnavailableError(f"Cannot run docker: {e}") from e
 

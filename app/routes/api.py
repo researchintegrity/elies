@@ -473,7 +473,7 @@ def global_search(
         img["type"] = "image"
         results.append(img)
 
-    results.sort(key=lambda x: x.get("uploaded_date") or datetime.min, reverse=True)
+    results.sort(key=lambda x: x.get("uploaded_date") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     paginated_results = results[skip:skip + per_page]
     total_pages = (total_items + per_page - 1) // per_page
 

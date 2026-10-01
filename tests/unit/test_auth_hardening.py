@@ -155,3 +155,12 @@ def test_redis_errors_switch_to_the_fallback(monkeypatch):
     limiter.hit("k")  # recorded in memory after the Redis error
     assert redis_client.get_redis() is None
     assert limiter.retry_after("k") >= 1
+
+
+def test_cli_refuses_an_email_that_differs_only_in_case(mock_db):
+    from app import cli
+    from app.db.mongodb import get_users_collection
+
+    get_users_collection().insert_one({"username": "legacy", "email": "Alice@Org.edu"})
+    with pytest.raises(ValueError, match="already exists"):
+        cli.create_admin("newadmin", "alice@org.edu", "a-long-passphrase")
