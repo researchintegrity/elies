@@ -1,0 +1,26 @@
+# Tool configuration. Dependencies are in requirements*.txt; pytest is
+# configured in pytest.ini.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+extend-exclude = ["system_modules"]
+
+[tool.ruff.lint]
+# Pyflakes (undefined names, unused imports/variables), pycodestyle errors and
+# lazy logging arguments (no f-strings in log calls). Formatting is not
+# enforced yet: reformatting the whole code base would bury real changes.
+select = ["E4", "E7", "E9", "F", "G004"]
+
+[tool.coverage.run]
+source = ["app"]
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]

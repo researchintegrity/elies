@@ -2,7 +2,6 @@
 import os
 from pathlib import Path
 
-import pytest
 
 import app.utils.docker_copy_move as copy_move
 import app.utils.docker_extraction as extraction

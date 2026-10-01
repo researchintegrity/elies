@@ -93,7 +93,7 @@ def create_relationship(
         # Always flag both images when a relationship is created
         # This ensures related images are marked for review
         _flag_images(user_id, [norm_id1, norm_id2])
-        logger.info(f"Created relationship between {norm_id1} and {norm_id2} (source: {source_type})")
+        logger.info("Created relationship between %s and %s (source: %s)", norm_id1, norm_id2, source_type)
     else:
         relationship_doc = existing
         # Keep the strongest evidence: raise the weight if the new one is higher
@@ -134,7 +134,7 @@ def remove_relationship(
         })
         return result.deleted_count > 0
     except Exception as e:
-        logger.error(f"Error removing relationship {relationship_id}: {e}")
+        logger.error("Error removing relationship %s: %s", relationship_id, e)
         return False
 
 
@@ -160,7 +160,7 @@ def remove_relationships_for_image(
     })
     
     if result.deleted_count > 0:
-        logger.info(f"Cascade deleted {result.deleted_count} relationships for image {image_id}")
+        logger.info("Cascade deleted %s relationships for image %s", result.deleted_count, image_id)
     
     return result.deleted_count
 

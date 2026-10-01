@@ -45,10 +45,10 @@ def get_user_upload_path(user_id: str, subfolder: str = None) -> Path:
     try:
         user_path.mkdir(parents=True, exist_ok=True)
     except OSError as e:
-        logger.error(f"Failed to create directory {user_path}: {e}")
+        logger.error("Failed to create directory %s: %s", user_path, e)
         # Check if it exists and what it is
         if user_path.exists():
-            logger.error(f"Path exists. Is dir? {user_path.is_dir()}. Is file? {user_path.is_file()}")
+            logger.error("Path exists. Is dir? %s. Is file? %s", user_path.is_dir(), user_path.is_file())
         raise
     return user_path
 
@@ -195,9 +195,9 @@ def figure_extraction_hook(
         )
         
         if extracted_count > 0:
-            logger.debug(f"Extracted {extracted_count} images for doc_id={doc_id}")
+            logger.debug("Extracted %s images for doc_id=%s", extracted_count, doc_id)
         elif extraction_errors:
-            logger.warning(f"Extraction errors for doc_id={doc_id}: {extraction_errors}")
+            logger.warning("Extraction errors for doc_id=%s: %s", doc_id, extraction_errors)
         
         return extracted_count, extraction_errors, extracted_files
 

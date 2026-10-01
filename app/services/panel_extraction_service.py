@@ -2,7 +2,7 @@
 Panel extraction service layer
 """
 import logging
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 from bson import ObjectId
 from app.db.mongodb import get_images_collection
 from app.exceptions import ResourceNotFoundError, ValidationError
@@ -69,7 +69,7 @@ def initiate_panel_extraction(
         image_paths=image_paths,
         job_id=job_id
     ), owner_id=user_id, job_id=job_id)
-    logger.info(f"Panel extraction task queued: {task.id} for user {user_id}")
+    logger.info("Panel extraction task queued: %s for user %s", task.id, user_id)
     return {
         "task_id": task.id,
         "status": "queued",
@@ -143,10 +143,10 @@ def get_panel_extraction_status(
                     response["extracted_panels"] = extracted_panels
 
                 except Exception as e:
-                    logger.error(f"Error retrieving extracted panels: {str(e)}")
+                    logger.error("Error retrieving extracted panels: %s", str(e))
                     response["error"] = f"Retrieved panels but with errors: {str(e)}"
 
-        logger.debug(f"Panel extraction status for task {task_id}: {response['status']}")
+        logger.debug("Panel extraction status for task %s: %s", task_id, response['status'])
         return response
 
     except Exception as e:
@@ -189,7 +189,7 @@ def get_panels_by_source_image(
             panel_response = _convert_document_to_response(panel_doc)
             result.append(panel_response)
 
-        logger.debug(f"Found {len(result)} panels for source image {source_image_id}")
+        logger.debug("Found %s panels for source image %s", len(result), source_image_id)
         return result
 
     except Exception as e:

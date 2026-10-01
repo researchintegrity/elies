@@ -124,7 +124,7 @@ def analyze_provenance(
     )
     
     # Trigger async task
-    task = submit_task(provenance_analysis_task, dict(
+    submit_task(provenance_analysis_task, dict(
         analysis_id=analysis_id,
         user_id=user_id,
         query_image_id=request.image_id,

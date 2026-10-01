@@ -133,7 +133,7 @@ def build_image_query(
                 parsed_from = datetime.fromisoformat(date_from.replace('Z', '+00:00'))
                 date_query["$gte"] = parsed_from
             except ValueError as e:
-                raise ValidationError(f"Invalid date format for date_from: {date_from}. Expected ISO format (e.g., 2025-01-01)")
+                raise ValidationError(f"Invalid date format for date_from: {date_from}. Expected ISO format (e.g., 2025-01-01)") from e
         if date_to:
             try:
                 parsed_to = datetime.fromisoformat(date_to.replace('Z', '+00:00'))
@@ -141,7 +141,7 @@ def build_image_query(
                 parsed_to = parsed_to.replace(hour=23, minute=59, second=59, microsecond=999999)
                 date_query["$lte"] = parsed_to
             except ValueError as e:
-                raise ValidationError(f"Invalid date format for date_to: {date_to}. Expected ISO format (e.g., 2025-01-01)")
+                raise ValidationError(f"Invalid date format for date_to: {date_to}. Expected ISO format (e.g., 2025-01-01)") from e
         if date_query:
             query["uploaded_date"] = date_query
     

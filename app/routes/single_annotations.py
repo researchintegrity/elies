@@ -2,8 +2,8 @@
 Single-image annotation routes
 Separate from dual annotations for clearer data management.
 """
-from fastapi import APIRouter, Depends, status, Query, HTTPException
-from typing import List, Optional
+from fastapi import APIRouter, Depends, status, Query
+from typing import List
 from bson import ObjectId
 from datetime import datetime
 

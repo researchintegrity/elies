@@ -173,21 +173,6 @@ class ErrorResponse(BaseModel):
         }
 
 
-class UserInDB(BaseModel):
-    """User model stored in database"""
-    username: str
-    email: str
-    hashed_password: str
-    full_name: Optional[str] = None
-    is_active: bool = True
-    roles: List[str] = Field(default_factory=lambda: ["user"])
-    storage_used_bytes: int = 0  # Total storage used (PDFs + images)
-    storage_limit_bytes: int = 1073741824  # 1 GB default
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
-    last_login_at: Optional[datetime] = None
-
-
 # ============================================================================
 # Document Upload Schemas
 # ============================================================================
@@ -260,18 +245,6 @@ class DocumentResponse(BaseModel):
         }
 
 
-class DocumentInDB(BaseModel):
-    """Document model stored in database"""
-    user_id: str
-    filename: str
-    file_path: str
-    file_size: int
-    extraction_status: str = "pending"
-    extracted_image_count: int = 0
-    extraction_errors: list[str] = Field(default_factory=list)
-    uploaded_date: datetime = Field(default_factory=datetime.utcnow)
-
-
 class PaginatedDocumentResponse(BaseModel):
     """Paginated response for document listing - supports efficient pagination"""
     items: List["DocumentResponse"] = Field(description="List of documents for current page")
@@ -320,18 +293,6 @@ class ImageCreate(BaseModel):
                 "source_type": "extracted",
                 "document_id": "507f1f77bcf86cd799439012",
                 "exif_metadata": {"Make": "Canon", "Model": "Canon EOS 5D Mark IV"}
-            }
-        }
-
-
-class CopyMoveAnalysisRequest(BaseModel):
-    """Request to start copy-move analysis"""
-    method: int = Field(2, ge=1, le=5, description="Detection method (1-5)")
-
-    class Config:
-        schema_extra = {
-            "example": {
-                "method": 2
             }
         }
 
@@ -404,19 +365,6 @@ class ImageResponse(BaseModel):
                 "user_storage_remaining": 549453824
             }
         }
-
-
-class ImageInDB(BaseModel):
-    """Image model stored in database"""
-    user_id: str
-    filename: str
-    file_path: str
-    file_size: int
-    source_type: str = "uploaded"
-    document_id: Optional[str] = None
-    uploaded_date: datetime = Field(default_factory=datetime.utcnow)
-    analysis_ids: List[str] = Field(default_factory=list)
-    is_flagged: bool = Field(default=False, description="Whether image is flagged as suspicious")
 
 
 class PaginatedImageResponse(BaseModel):
@@ -1078,18 +1026,6 @@ class JobStatsResponse(BaseModel):
     by_type: Dict[str, int] = Field(default_factory=dict, description="Job counts by type")
 
 
-class JobNotification(BaseModel):
-    """SSE notification payload for real-time job status changes"""
-    event: str = Field(..., description="Event type: job_started, job_progress, job_completed, job_failed")
-    job_id: str = Field(..., description="Job identifier")
-    job_type: str = Field(..., description="Type of job")
-    status: str = Field(..., description="Current status")
-    title: Optional[str] = Field(None, description="Job title for display")
-    progress_percent: Optional[float] = Field(None, description="Progress if applicable")
-    current_step: Optional[str] = Field(None, description="Current step if applicable")
-    error: Optional[str] = Field(None, description="Error message if failed")
-
-
 # ============================================================================
 # ANALYSIS SCHEMAS
 # ============================================================================
@@ -1155,24 +1091,6 @@ class TruForAnalysisCreate(BaseModel):
     save_noiseprint: bool = Field(
         default=False,
         description="Whether to save the noiseprint map (useful for advanced analysis)"
-    )
-
-
-class ScreeningToolAnalysisCreate(BaseModel):
-    """Request to save a screening tool/client-side analysis result"""
-    image_id: str = Field(..., description="ID of the image that was analyzed")
-    analysis_subtype: str = Field(
-        ...,
-        description="Subtype of analysis (e.g., 'ela', 'noise_analysis', 'magnifier', 'histogram')"
-    )
-    parameters: Dict[str, Any] = Field(
-        default_factory=dict,
-        description="Parameters used in the client-side analysis (e.g., quality level for ELA)"
-    )
-    notes: Optional[str] = Field(
-        None,
-        max_length=2000,
-        description="Optional notes or observations about the analysis"
     )
 
 

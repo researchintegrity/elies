@@ -363,8 +363,6 @@ def get_image_detail(
         Image details
     """
     user_id = str(current_user.get("_id"))
-    collection = get_images_collection()
-    
     image = get_owned_resource(get_images_collection, image_id, user_id, "Image")
     
     # Convert ObjectId to string

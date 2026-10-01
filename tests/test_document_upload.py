@@ -19,8 +19,6 @@ import os
 from app.config.settings import convert_container_path_to_host
 from bson import ObjectId
 from unittest.mock import patch, MagicMock
-from fastapi.testclient import TestClient
-from app.main import app
 
 from app.db.mongodb import get_documents_collection, get_images_collection, db_connection
 import shutil

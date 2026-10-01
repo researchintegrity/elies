@@ -5,7 +5,6 @@ Tests the pre-flight CBIR check and all-or-nothing cleanup behavior.
 """
 import pytest
 from unittest.mock import patch, MagicMock
-from datetime import datetime
 from PIL import Image
 import io
 

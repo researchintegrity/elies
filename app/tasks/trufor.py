@@ -45,7 +45,7 @@ def detect_trufor(
         try:
             job.progress(None, message)
         except Exception as e:
-            logger.error(f"Failed to update status for analysis {analysis_id}: {e}")
+            logger.error("Failed to update status for analysis %s: %s", analysis_id, e)
 
     def work():
         success, message, results = run_trufor_detection_with_docker(

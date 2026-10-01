@@ -68,8 +68,7 @@ def initiate_watermark_removal(
     pdf_path = str(convert_host_path_to_container(doc['file_path']))
     
     logger.info(
-        f"Initiating watermark removal for doc_id={document_id}, "
-        f"user_id={user_id}, mode={aggressiveness_mode}"
+        "Initiating watermark removal for doc_id=%s, user_id=%s, mode=%s", document_id, user_id, aggressiveness_mode
     )
     
     # Create job log entry for the jobs dashboard (pending state)
@@ -104,7 +103,7 @@ def initiate_watermark_removal(
         }
     )
     
-    logger.info(f"Watermark removal task queued with ID: {task.id}")
+    logger.info("Watermark removal task queued with ID: %s", task.id)
     
     return {
         "document_id": document_id,
@@ -132,8 +131,6 @@ def get_watermark_removal_status(
     Raises:
         ResourceNotFoundError: Document not found or not owned by the user
     """
-    documents_col = get_documents_collection()
-    
     doc = get_owned_resource(get_documents_collection, document_id, user_id, "Document")
 
     # Extract watermark removal information

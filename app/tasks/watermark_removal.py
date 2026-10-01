@@ -2,7 +2,7 @@
 Watermark removal tasks for async processing
 """
 from app.celery_config import celery_app
-from app.db.mongodb import get_documents_collection, get_images_collection
+from app.db.mongodb import get_documents_collection
 from app.utils.docker_watermark import remove_watermark_with_docker
 from app.config.settings import (
     CELERY_MAX_RETRIES,
@@ -73,7 +73,7 @@ def remove_watermark_from_document(
     try:
         
         logger.info(
-            f"Starting watermark removal for doc_id={doc_id}, mode={aggressiveness_mode}"
+            "Starting watermark removal for doc_id=%s, mode=%s", doc_id, aggressiveness_mode
         )
         
         # Update status to processing
@@ -120,8 +120,7 @@ def remove_watermark_from_document(
             add_storage(user_id, output_file_size)
             
             logger.info(
-                f"Watermark removal successful for doc_id={doc_id}: "
-                f"output_file={output_filename}, size={output_file_size}"
+                "Watermark removal successful for doc_id=%s: output_file=%s, size=%s", doc_id, output_filename, output_file_size
             )
             
             update_job_progress(job_id, user_id, None, 80, "Creating cleaned document record...")
@@ -146,7 +145,7 @@ def remove_watermark_from_document(
             result = documents_col.insert_one(cleaned_doc_data)
             cleaned_doc_id = str(result.inserted_id)
             
-            logger.info(f"Created new document record for cleaned PDF: {cleaned_doc_id}")
+            logger.info("Created new document record for cleaned PDF: %s", cleaned_doc_id)
             
             # Update original document with watermark removal info
             update_data = {
@@ -166,7 +165,7 @@ def remove_watermark_from_document(
                 "watermark_removal_message": status_message,
                 "watermark_removal_error": status_message
             }
-            logger.error(f"Watermark removal failed for doc_id={doc_id}: {status_message}")
+            logger.error("Watermark removal failed for doc_id=%s: %s", doc_id, status_message)
         
         # Update original document
         documents_col.update_one(

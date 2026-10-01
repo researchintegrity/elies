@@ -101,7 +101,7 @@ def list_users(
             user["roles"] = ["user"]
         users.append(AdminUserResponse(**user).model_dump(by_alias=True))
     
-    logger.info(f"Admin {current_admin['username']} listed users (page {page}, total {total})")
+    logger.info("Admin %s listed users (page %s, total %s)", current_admin['username'], page, total)
     
     return {
         "users": users,
@@ -146,7 +146,7 @@ def get_user(
     if "roles" not in user:
         user["roles"] = ["user"]
     
-    logger.info(f"Admin {current_admin['username']} viewed user {user['username']}")
+    logger.info("Admin %s viewed user %s", current_admin['username'], user['username'])
     
     return AdminUserResponse(**user).model_dump(by_alias=True)
 
@@ -208,8 +208,7 @@ def update_user_quota(
     old_quota = user.get("storage_limit_bytes", 0)
     new_quota = quota_update.storage_limit_bytes
     logger.info(
-        f"Admin {current_admin['username']} updated quota for user {user['username']}: "
-        f"{old_quota} -> {new_quota} bytes"
+        "Admin %s updated quota for user %s: %s -> %s bytes", current_admin['username'], user['username'], old_quota, new_quota
     )
     
     return AdminUserResponse(**result).model_dump(by_alias=True)
@@ -277,8 +276,7 @@ def update_user_role(
 
     old_roles = target_user.get("roles", ["user"])
     logger.info(
-        f"Admin {current_admin['username']} updated roles for user {target_user['username']}: "
-        f"{old_roles} -> {role_update.roles}"
+        "Admin %s updated roles for user %s: %s -> %s", current_admin['username'], target_user['username'], old_roles, role_update.roles
     )
     
     return AdminUserResponse(**result).model_dump(by_alias=True)
@@ -357,8 +355,7 @@ def reset_user_password(
     revoke_user_tokens(object_id)
 
     logger.info(
-        f"Admin {current_admin['username']} reset password for user {target_user['username']} "
-        f"(generated: {generated})"
+        "Admin %s reset password for user %s (generated: %s)", current_admin['username'], target_user['username'], generated
     )
     
     response = {
@@ -436,7 +433,7 @@ def update_user_status(
         result["roles"] = ["user"]
     
     action = "activated" if status_update.is_active else "deactivated"
-    logger.info(f"Admin {current_admin['username']} {action} user {target_user['username']}")
+    logger.info("Admin %s %s user %s", current_admin['username'], action, target_user['username'])
     
     return AdminUserResponse(**result).model_dump(by_alias=True)
 
@@ -469,7 +466,7 @@ def delete_user(
         )
 
     request_account_deletion(user_id)
-    logger.info(f"Admin {current_admin['username']} deleted user {target_user['username']}")
+    logger.info("Admin %s deleted user %s", current_admin['username'], target_user['username'])
     return {"message": f"User {target_user['username']} is being deleted"}
 
 
@@ -528,6 +525,6 @@ def get_admin_stats(
     # Count admins separately
     stats["admin_count"] = collection.count_documents({"roles": "admin"})
     
-    logger.info(f"Admin {current_admin['username']} retrieved system stats")
+    logger.info("Admin %s retrieved system stats", current_admin['username'])
     
     return stats

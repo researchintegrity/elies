@@ -803,9 +803,7 @@ REDIS_URL=redis://redis:6379/0
 ### Authentication & Security
 
 - **pyjwt**: JWT token generation and validation
-- **passlib**: Password hashing framework
-- **bcrypt**: Secure password hashing algorithm
-- **cryptography**: Cryptographic recipes and primitives
+- **bcrypt**: Password hashing
 
 ### Data Validation
 

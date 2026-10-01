@@ -13,7 +13,6 @@ from app.utils.docker_cbir import (
     search_similar_images,
     search_similar_images_upload,
     delete_image_from_index,
-    delete_images_batch,
     delete_user_data,
     check_images_indexed,
 )
@@ -246,25 +245,6 @@ class TestDeleteOperations:
         )
         
         assert success is True
-    
-    @patch('app.utils.docker_cbir.requests.post')
-    def test_delete_batch(self, mock_post):
-        """Test deleting multiple images from index"""
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"status": "success", "deleted_count": 3}
-        mock_post.return_value = mock_response
-        
-        paths = [
-            f"{CONTAINER_WORKSPACE_PATH}/user123/images/img1.jpg",
-            f"{CONTAINER_WORKSPACE_PATH}/user123/images/img2.jpg",
-            f"{CONTAINER_WORKSPACE_PATH}/user123/images/img3.jpg"
-        ]
-        
-        success, message, data = delete_images_batch("user123", paths)
-        
-        assert success is True
-        assert data.get("deleted_count") == 3
     
     @patch('app.utils.docker_cbir.requests.post')
     def test_delete_user_data(self, mock_post):

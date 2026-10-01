@@ -141,8 +141,8 @@ def _parse_panels_csv(
         filename_stem = os.path.splitext(filename)[0]
         filename_stem_to_id[filename_stem] = img_id
 
-    logger.debug(f"Filename to image_id mapping: {filename_to_id}")
-    logger.debug(f"Filename stem to image_id mapping: {filename_stem_to_id}")
+    logger.debug("Filename to image_id mapping: %s", filename_to_id)
+    logger.debug("Filename stem to image_id mapping: %s", filename_stem_to_id)
 
     panels_data = []
 
@@ -161,19 +161,19 @@ def _parse_panels_csv(
         for row_num, row in enumerate(reader, start=2):  # Start at 2 (after header)
             try:
                 figname = row['FIGNAME'].strip()
-                logger.debug(f"Row {row_num}: Processing FIGNAME='{figname}'")
-                logger.debug(f"  Checking exact match in: {list(filename_to_id.keys())}")
-                logger.debug(f"  Checking stem match in: {list(filename_stem_to_id.keys())}")
+                logger.debug("Row %s: Processing FIGNAME='%s'", row_num, figname)
+                logger.debug("  Checking exact match in: %s", list(filename_to_id.keys()))
+                logger.debug("  Checking stem match in: %s", list(filename_stem_to_id.keys()))
 
                 # Map FIGNAME to image_id
                 # First try exact match (with extension)
                 image_id = filename_to_id.get(figname)
-                logger.debug(f"  Exact match result: {image_id}")
+                logger.debug("  Exact match result: %s", image_id)
                 
                 # If no exact match, try matching by stem (FIGNAME is usually just the stem)
                 if not image_id:
                     image_id = filename_stem_to_id.get(figname)
-                    logger.debug(f"  Stem match result: {image_id}")
+                    logger.debug("  Stem match result: %s", image_id)
                 
                 if not image_id:
                     raise ValueError(
@@ -201,11 +201,11 @@ def _parse_panels_csv(
                 }
 
                 panels_data.append(panel_data)
-                logger.debug(f"Row {row_num}: Parsed panel {panel_data['panel_id']} from {figname}")
+                logger.debug("Row %s: Parsed panel %s from %s", row_num, panel_data['panel_id'], figname)
 
             except (ValueError, KeyError) as e:
-                logger.error(f"Error parsing row {row_num}: {str(e)}")
+                logger.error("Error parsing row %s: %s", row_num, str(e))
                 raise
 
-    logger.info(f"Successfully parsed {len(panels_data)} panels from PANELS.csv")
+    logger.info("Successfully parsed %s panels from PANELS.csv", len(panels_data))
     return panels_data

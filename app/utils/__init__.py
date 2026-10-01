@@ -1,1 +1,1 @@
-"""ELIES User Management System - Utilities package"""
+"""ELIES utilities."""

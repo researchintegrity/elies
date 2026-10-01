@@ -9,7 +9,6 @@ import tempfile
 import os
 import shutil
 import subprocess
-from pathlib import Path
 
 # Needs a Docker daemon and the built tool images (docker compose --profile tools build)
 pytestmark = pytest.mark.e2e

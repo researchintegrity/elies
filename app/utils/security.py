@@ -14,9 +14,9 @@ from bson import ObjectId
 from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, Query, status
 from fastapi.security import OAuth2PasswordBearer
-from passlib.context import CryptContext
+import bcrypt
 
-from app.config.settings import BCRYPT_ROUNDS
+from app.config.settings import BCRYPT_ROUNDS, PASSWORD_MAX_BYTES
 from app.db.mongodb import get_users_collection
 
 load_dotenv()
@@ -58,7 +58,6 @@ def _load_jwt_secret() -> str:
 JWT_SECRET = _load_jwt_secret()
 
 # Password hashing context
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto", bcrypt__rounds=BCRYPT_ROUNDS)
 
 # Bearer token from the Authorization header; missing tokens are handled below
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="auth/login", auto_error=False)
@@ -84,14 +83,26 @@ class RedactTokenFilter(logging.Filter):
         return True
 
 
+def _password_bytes(password: str) -> bytes:
+    # bcrypt only uses the first 72 bytes. Passwords are limited to that length
+    # at registration; truncating here keeps hashes created by passlib (which
+    # truncated silently) verifiable.
+    return password.encode("utf-8")[:PASSWORD_MAX_BYTES]
+
+
 def hash_password(password: str) -> str:
     """Hash a password using bcrypt"""
-    return pwd_context.hash(password)
+    return bcrypt.hashpw(_password_bytes(password), bcrypt.gensalt(rounds=BCRYPT_ROUNDS)).decode("ascii")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    """Verify a plain password against its hash"""
-    return pwd_context.verify(plain_password, hashed_password)
+    """Verify a plain password against its bcrypt hash"""
+    if not hashed_password:
+        return False
+    try:
+        return bcrypt.checkpw(_password_bytes(plain_password), hashed_password.encode("ascii"))
+    except ValueError:  # not a bcrypt hash
+        return False
 
 
 _dummy_password_hash: Optional[str] = None
@@ -106,7 +117,7 @@ def verify_password_or_dummy(plain_password: str, hashed_password: Optional[str]
     if hashed_password is None:
         if _dummy_password_hash is None:
             _dummy_password_hash = hash_password(secrets.token_urlsafe(16))
-        pwd_context.verify(plain_password, _dummy_password_hash)
+        verify_password(plain_password, _dummy_password_hash)
         return False
     return verify_password(plain_password, hashed_password)
 

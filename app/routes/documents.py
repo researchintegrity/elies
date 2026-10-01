@@ -5,7 +5,7 @@ import logging
 import math
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List
 
 from bson import ObjectId
 from celery.result import AsyncResult
@@ -23,7 +23,6 @@ from app.schemas import (
     WatermarkRemovalInitiationResponse,
     WatermarkRemovalRequest,
     WatermarkRemovalStatusResponse,
-    JobStatus,
     JobType,
 )
 from app.services.document_service import delete_document_and_artifacts
@@ -42,7 +41,6 @@ from app.utils.docker_cbir import check_cbir_health
 from app.utils.security import get_current_user, get_current_user_media
 
 logger = logging.getLogger(__name__)
-_warned_deprecated = False
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -68,7 +66,7 @@ def upload_document(
     # Extracted images are indexed in CBIR, so block uploads while it is down
     cbir_healthy, cbir_message = check_cbir_health()
     if not cbir_healthy:
-        logger.warning(f"CBIR service unavailable: {cbir_message}")
+        logger.warning("CBIR service unavailable: %s", cbir_message)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Unable to upload documents at this time. Please try again in a few minutes."

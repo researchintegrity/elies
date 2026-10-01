@@ -8,7 +8,7 @@ Run with: pytest tests/test_watermark_removal.py -v
 import pytest
 import requests
 import os
-from unittest.mock import Mock, patch, MagicMock, AsyncMock
+from unittest.mock import patch, MagicMock
 
 from app.schemas import (
     WatermarkRemovalRequest,

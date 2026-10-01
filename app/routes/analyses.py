@@ -7,7 +7,6 @@ from app.schemas import (
     CrossImageAnalysisCreate,
     SingleImageAnalysisCreate,
     TruForAnalysisCreate,
-    ScreeningToolAnalysisCreate,
     AnalysisType,
     AnalysisStatus,
     PaginatedResponse,
@@ -17,7 +16,6 @@ from app.services.deletion_service import delete_analyses
 from app.services.resource_helpers import get_owned_resource
 from app.services.job_logger import create_job_log, ensure_job_capacity
 from app.services.task_submission import submit_task
-from app.config.settings import convert_container_path_to_host, is_container_path
 from datetime import datetime
 from bson import ObjectId
 from pathlib import Path
@@ -446,7 +444,7 @@ def analyze_copy_move_single(
     )
     
     # Trigger task with analysis_id and job_id
-    task = submit_task(detect_copy_move, dict(
+    submit_task(detect_copy_move, dict(
         analysis_id=analysis_id,
         image_id=request.image_id,
         user_id=user_id_str,
@@ -544,7 +542,7 @@ def analyze_copy_move_cross(
     
     from app.tasks.copy_move_detection import detect_copy_move_cross
     
-    task = submit_task(detect_copy_move_cross, dict(
+    submit_task(detect_copy_move_cross, dict(
         analysis_id=analysis_id,
         source_image_id=request.source_image_id,
         target_image_id=request.target_image_id,
@@ -622,7 +620,7 @@ def analyze_trufor(
     
     # Trigger task
     from app.tasks.trufor import detect_trufor
-    task = submit_task(detect_trufor, dict(
+    submit_task(detect_trufor, dict(
         analysis_id=analysis_id,
         image_id=request.image_id,
         user_id=user_id_str,

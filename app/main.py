@@ -9,6 +9,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app import __version__
 from app.config.settings import ALLOWED_ORIGINS, LOG_LEVEL
 from app.db.mongodb import db_connection
 from app.exceptions import ELIESException
@@ -48,8 +49,8 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app
 app = FastAPI(
     title="ELIES Scientific Image Analysis System",
-    description="A backed-end service for Image Analysis",
-    version="1.0.0",
+    description="Back-end API for scientific image integrity analysis",
+    version=__version__,
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
@@ -131,8 +132,8 @@ def root() -> dict:
     Provides information about available endpoints and API version
     """
     return {
-        "message": "Welcome to ELIES User Management System",
-        "version": "1.0.0",
+        "message": "Welcome to the ELIES Scientific Image Analysis API",
+        "version": __version__,
         "documentation": {
             "swagger": "/docs",
             "redoc": "/redoc"
@@ -160,14 +161,14 @@ def health_check() -> dict:
         return {
             "status": "healthy",
             "database": "connected",
-            "version": "0.0.1"
+            "version": __version__
         }
     except Exception as e:
         return {
             "status": "unhealthy",
             "database": "disconnected",
             "error": str(e),
-            "version": "0.0.1"
+            "version": __version__
         }
 
 

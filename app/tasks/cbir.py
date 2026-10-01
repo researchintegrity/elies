@@ -95,7 +95,7 @@ def _retry_while_cbir_down(task, cbir_message: str) -> None:
     """Retry the task with exponential backoff while retries remain."""
     if task.request.retries < task.max_retries:
         countdown = CBIR_RETRY_BASE_DELAY * (2 ** task.request.retries)
-        logger.warning(f"CBIR unavailable ({cbir_message}); retrying in {countdown}s")
+        logger.warning("CBIR unavailable (%s); retrying in %ss", cbir_message, countdown)
         raise task.retry(countdown=countdown)
 
 
@@ -114,14 +114,14 @@ def cbir_index_image(
     image itself is never deleted.
     """
     try:
-        logger.info(f"Indexing image {image_id} for user {user_id}")
+        logger.info("Indexing image %s for user %s", image_id, user_id)
         success, message, result = index_image(
             user_id=user_id,
             image_path=image_path,
             labels=labels or []
         )
     except Exception as e:
-        logger.error(f"Error indexing image {image_id}: {e}")
+        logger.error("Error indexing image %s: %s", image_id, e)
         if self.request.retries < self.max_retries:
             raise self.retry(exc=e, countdown=CBIR_RETRY_BASE_DELAY * (2 ** self.request.retries))
         _mark_index_failure([image_id], f"Indexing error: {e}")
@@ -133,10 +133,10 @@ def cbir_index_image(
             {"$set": {"cbir_indexed": True, "cbir_indexed_at": datetime.utcnow(), "cbir_id": result.get("id")},
              "$unset": {"cbir_error": "", "cbir_failed_at": ""}},
         )
-        logger.info(f"Image {image_id} indexed successfully")
+        logger.info("Image %s indexed successfully", image_id)
         return {"status": "success", "cbir_id": result.get("id")}
 
-    logger.error(f"Failed to index image {image_id}: {message}")
+    logger.error("Failed to index image %s: %s", image_id, message)
     _mark_index_failure([image_id], message)
     return {"status": "failed", "error": message}
 
@@ -159,7 +159,7 @@ def cbir_index_batch(
         image_items: List of dicts with 'image_id', 'image_path', 'labels'
     """
     image_ids = [item.get("image_id") for item in image_items]
-    logger.info(f"Batch indexing {len(image_items)} images for user {user_id}")
+    logger.info("Batch indexing %s images for user %s", len(image_items), user_id)
 
     cbir_healthy, cbir_message = check_cbir_health()
     if not cbir_healthy:
@@ -170,7 +170,7 @@ def cbir_index_batch(
     try:
         indexed, failed, error = _index_chunk(user_id, image_items)
     except Exception as e:
-        logger.error(f"Error batch indexing for user {user_id}: {e}")
+        logger.error("Error batch indexing for user %s: %s", user_id, e)
         if self.request.retries < self.max_retries:
             raise self.retry(exc=e, countdown=CBIR_RETRY_BASE_DELAY * (2 ** self.request.retries))
         indexed, failed, error = [], image_ids, f"Indexing error: {e}"
@@ -178,7 +178,7 @@ def cbir_index_batch(
     _mark_indexed(indexed)
     _mark_index_failure(failed, error or "Indexing failed")
     status = "success" if not failed else ("partial" if indexed else "failed")
-    logger.info(f"Batch indexed {len(indexed)}/{len(image_items)} images for user {user_id}")
+    logger.info("Batch indexed %s/%s images for user %s", len(indexed), len(image_items), user_id)
     return {"status": status, "indexed_count": len(indexed), "failed_image_ids": failed}
 
 
@@ -231,7 +231,7 @@ def cbir_index_batch_with_progress(
 
     existing_job = jobs_col.find_one({"_id": job_id})
     if existing_job and existing_job.get("status") in terminal_statuses:
-        logger.warning(f"Job {job_id} already in terminal state '{existing_job.get('status')}', skipping")
+        logger.warning("Job %s already in terminal state '%s', skipping", job_id, existing_job.get('status'))
         return {"job_id": job_id, "status": existing_job.get("status")}
 
     if main_job_id:
@@ -260,7 +260,7 @@ def cbir_index_batch_with_progress(
         try:
             indexed, failed, error = _index_chunk(user_id, chunk)
         except Exception as e:
-            logger.error(f"Chunk indexing error for job {job_id}: {e}")
+            logger.error("Chunk indexing error for job %s: %s", job_id, e)
             indexed, failed, error = [], [item["image_id"] for item in chunk], f"Indexing error: {e}"
         _mark_indexed(indexed)
         _mark_index_failure(failed, error or "Indexing failed")
@@ -284,7 +284,7 @@ def cbir_index_batch_with_progress(
             errors=errors or None,
         )
 
-    logger.info(f"Job {job_id} finished: {final_step}")
+    logger.info("Job %s finished: %s", job_id, final_step)
     return {
         "status": final_status,
         "indexed_count": len(indexed_ids),
@@ -354,7 +354,7 @@ def cbir_delete_image(
         image_path: Path to the image
     """
     try:
-        logger.info(f"Deleting image {image_id} from CBIR index")
+        logger.info("Deleting image %s from CBIR index", image_id)
         
         success, message = delete_image_from_index(user_id, image_path)
         
@@ -373,14 +373,14 @@ def cbir_delete_image(
                     }
                 }
             )
-            logger.info(f"Image {image_id} removed from CBIR index")
+            logger.info("Image %s removed from CBIR index", image_id)
             return {"status": "success"}
         else:
-            logger.error(f"Failed to delete image {image_id} from CBIR: {message}")
+            logger.error("Failed to delete image %s from CBIR: %s", image_id, message)
             return {"status": "failed", "error": message}
             
     except Exception as e:
-        logger.error(f"Error deleting image {image_id} from CBIR: {e}")
+        logger.error("Error deleting image %s from CBIR: %s", image_id, e)
         raise self.retry(exc=e, countdown=60)
 
 
@@ -405,19 +405,19 @@ def cbir_update_labels(
         labels: New labels list
     """
     try:
-        logger.info(f"Updating CBIR labels for image {image_id}: {labels}")
+        logger.info("Updating CBIR labels for image %s: %s", image_id, labels)
         
         success, message = update_image_labels(user_id, image_path, labels)
         
         if success:
-            logger.info(f"CBIR labels updated for image {image_id}")
+            logger.info("CBIR labels updated for image %s", image_id)
             return {"status": "success", "labels": labels}
         else:
-            logger.warning(f"CBIR label update for image {image_id}: {message}")
+            logger.warning("CBIR label update for image %s: %s", image_id, message)
             return {"status": "skipped", "message": message}
             
     except Exception as e:
-        logger.error(f"Error updating CBIR labels for image {image_id}: {e}")
+        logger.error("Error updating CBIR labels for image %s: %s", image_id, e)
         raise self.retry(exc=e, countdown=60)
 
 
@@ -430,7 +430,7 @@ def cbir_delete_user_data(self, user_id: str):
         user_id: User ID whose data to delete
     """
     try:
-        logger.info(f"Deleting all CBIR data for user {user_id}")
+        logger.info("Deleting all CBIR data for user %s", user_id)
         
         success, message = delete_user_data(user_id)
         
@@ -444,14 +444,14 @@ def cbir_delete_user_data(self, user_id: str):
                     "$unset": {"cbir_indexed_at": ""}
                 }
             )
-            logger.info(f"All CBIR data deleted for user {user_id}")
+            logger.info("All CBIR data deleted for user %s", user_id)
             return {"status": "success"}
         else:
-            logger.error(f"Failed to delete CBIR data for user {user_id}: {message}")
+            logger.error("Failed to delete CBIR data for user %s: %s", user_id, message)
             return {"status": "failed", "error": message}
             
     except Exception as e:
-        logger.error(f"Error deleting CBIR data for user {user_id}: {e}")
+        logger.error("Error deleting CBIR data for user %s: %s", user_id, e)
         raise self.retry(exc=e, countdown=60)
 
 

@@ -6,7 +6,7 @@ import math
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Optional
 
 from bson import ObjectId
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
@@ -74,7 +74,7 @@ def _require_cbir_available() -> None:
     """Block uploads while CBIR is down: new images could not be indexed."""
     cbir_healthy, cbir_message = check_cbir_health()
     if not cbir_healthy:
-        logger.warning(f"CBIR service unavailable: {cbir_message}")
+        logger.warning("CBIR service unavailable: %s", cbir_message)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Unable to upload images at this time. Please try again in a few minutes."
@@ -124,7 +124,7 @@ def upload_image(
         )
     except Exception as e:
         # Log but don't fail the upload if CBIR indexing fails to queue
-        logger.warning(f"Failed to queue CBIR indexing for image {image_id}: {e}")
+        logger.warning("Failed to queue CBIR indexing for image %s: %s", image_id, e)
 
     img_record["_id"] = image_id
     img_record = augment_with_quota(img_record, user_id_str, user_quota)
@@ -173,10 +173,10 @@ def upload_images_batch(
         except StorageQuotaExceededError as e:
             if not uploaded_images:
                 raise
-            logger.warning(f"Stopping batch upload at {file.filename}: {e}")
+            logger.warning("Stopping batch upload at %s: %s", file.filename, e)
             break
         except ValidationError as e:
-            logger.warning(f"Skipping invalid image {file.filename}: {e}")
+            logger.warning("Skipping invalid image %s: %s", file.filename, e)
             continue
         uploaded_images.append({
             "image_id": str(img_record["_id"]),
@@ -226,7 +226,7 @@ def upload_images_batch(
             main_job_id=main_job_id
         )
     except Exception as e:
-        logger.error(f"Failed to start batch indexing for user {user_id_str}: {e}")
+        logger.error("Failed to start batch indexing for user %s: %s", user_id_str, e)
         _discard_new_images(new_image_ids, user_id_str)
         complete_job(main_job_id, user_id_str, JobStatus.FAILED, errors=["Failed to queue indexing; upload rolled back"])
         get_indexing_jobs_collection().delete_one({"_id": job_id})
@@ -508,7 +508,7 @@ def download_image(
     if not Path(file_path).exists():
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"File not found on disk"
+            detail="File not found on disk"
         )
     
     # Determine media type from file extension
@@ -569,7 +569,7 @@ def get_image_thumbnail(
         if not Path(file_path).exists():
              raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail=f"Original file not found"
+                detail="Original file not found"
             )
             
         try:
@@ -717,7 +717,7 @@ def initiate_panel_extraction_endpoint(
     # Pre-flight CBIR health check - block extraction if CBIR is unavailable
     cbir_healthy, cbir_message = check_cbir_health()
     if not cbir_healthy:
-        logger.warning(f"CBIR service unavailable: {cbir_message}")
+        logger.warning("CBIR service unavailable: %s", cbir_message)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Unable to upload images at this time. Please try again in a few minutes."
@@ -791,7 +791,7 @@ def get_panel_extraction_status_endpoint(
     except ELIESException:
         raise
     except Exception as e:
-        logger.error(f"Failed to get extraction status for task {task_id}: {e}", exc_info=True)
+        logger.error("Failed to get extraction status for task %s: %s", task_id, e, exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to get extraction status"

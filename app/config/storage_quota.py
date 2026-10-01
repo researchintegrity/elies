@@ -54,26 +54,3 @@ def format_bytes(bytes_value: int) -> str:
     return f"{bytes_value:.2f} PB"
 
 
-def get_quota_info(used_bytes: int, quota_bytes: int = DEFAULT_USER_STORAGE_QUOTA) -> dict:
-    """
-    Get detailed quota information for a user
-    
-    Args:
-        used_bytes: Current storage usage in bytes
-        quota_bytes: Total quota in bytes
-        
-    Returns:
-        Dictionary with quota information
-    """
-    remaining = quota_bytes - used_bytes
-    used_percentage = (used_bytes / quota_bytes) * 100 if quota_bytes > 0 else 0
-    
-    return {
-        "used_bytes": used_bytes,
-        "used_formatted": format_bytes(used_bytes),
-        "quota_bytes": quota_bytes,
-        "quota_formatted": format_bytes(quota_bytes),
-        "remaining_bytes": max(0, remaining),
-        "remaining_formatted": format_bytes(max(0, remaining)),
-        "used_percentage": round(used_percentage, 2),
-    }

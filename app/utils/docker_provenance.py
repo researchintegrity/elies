@@ -89,7 +89,7 @@ def analyze_provenance(
         "max_workers": max_workers
     }
     
-    logger.info(f"Starting provenance analysis for user {user_id}, query {query_image['id']}")
+    logger.info("Starting provenance analysis for user %s, query %s", user_id, query_image['id'])
     
     try:
         response = requests.post(
@@ -104,12 +104,12 @@ def analyze_provenance(
             error_detail = response.json().get("detail", response.text)
         except ValueError:
             error_detail = response.text
-        logger.error(f"Provenance analysis failed: {error_detail}")
+        logger.error("Provenance analysis failed: %s", error_detail)
         return False, f"Analysis failed: {error_detail}", {}
 
     except requests.ConnectionError as e:
         # Service not reachable (e.g. still starting): let the task retry
         raise TransientError(f"Provenance service unreachable: {e}") from e
     except requests.RequestException as e:
-        logger.error(f"Provenance service request failed: {e}")
+        logger.error("Provenance service request failed: %s", e)
         return False, f"Provenance service error: {str(e)}", {}

@@ -285,26 +285,6 @@ BCRYPT_ROUNDS = _env_int("BCRYPT_ROUNDS", 12)  # bcrypt cost factor (tests lower
 # UTILITY FUNCTIONS
 # ============================================================================
 
-def get_extraction_path_template() -> str:
-    """
-    Get the path template for extracted images.
-    
-    Returns:
-        Template string: {user_id}/images/extracted/{doc_id}/{filename}
-    """
-    return f"{{user_id}}/{EXTRACTION_SUBDIRECTORY}/{{doc_id}}/{{filename}}"
-
-
-def get_container_path_prefix() -> Path:
-    """
-    Get the prefix used for container paths (for path detection).
-    
-    Returns:
-        Container path prefix as Path object.
-    """
-    return CONTAINER_WORKSPACE_PATH
-
-
 def is_container_path(path: Union[str, Path]) -> bool:
     """
     Check if a path is running inside a container.

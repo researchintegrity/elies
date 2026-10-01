@@ -22,8 +22,6 @@ from app.config.settings import JOB_EVENTS_REDIS_URL
 from app.utils.security import get_current_user
 from app.db.mongodb import get_jobs_collection
 from app.schemas import (
-    JobType,
-    JobStatus,
     JobLogResponse,
     JobListResponse,
     JobStatsResponse

@@ -25,7 +25,7 @@ def _create_relationships_from_provenance(user_id: str, query_image_id: str, res
     """
     try:
         # Debug: log the result keys to understand structure
-        logger.info(f"Provenance result keys: {list(result.keys()) if result else 'None'}")
+        logger.info("Provenance result keys: %s", list(result.keys()) if result else 'None')
         
         # The provenance result has edges nested under 'graph' key
         graph = result.get('graph', {})
@@ -39,10 +39,10 @@ def _create_relationships_from_provenance(user_id: str, query_image_id: str, res
         if not edges:
             edges = result.get('edges', [])
         
-        logger.info(f"Found {len(edges)} edges for analysis {analysis_id}")
+        logger.info("Found %s edges for analysis %s", len(edges), analysis_id)
         
         if not edges:
-            logger.info(f"No edges found in provenance result for analysis {analysis_id}")
+            logger.info("No edges found in provenance result for analysis %s", analysis_id)
             return 0
         
         created_count = 0
@@ -64,12 +64,12 @@ def _create_relationships_from_provenance(user_id: str, query_image_id: str, res
                 )
                 created_count += 1
             except Exception as e:
-                logger.warning(f"Could not create relationship {source_id}-{target_id}: {e}")
+                logger.warning("Could not create relationship %s-%s: %s", source_id, target_id, e)
 
-        logger.info(f"Created {created_count} relationships from provenance analysis {analysis_id}")
+        logger.info("Created %s relationships from provenance analysis %s", created_count, analysis_id)
         return created_count
     except Exception as e:
-        logger.error(f"Error creating relationships from provenance: {e}")
+        logger.error("Error creating relationships from provenance: %s", e)
         return 0
 
 
