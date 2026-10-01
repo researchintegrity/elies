@@ -759,27 +759,19 @@ Test fixtures automatically:
 
 ## Environment Configuration
 
-### Required Variables
+Settings are environment variables, read from `.env` by Docker Compose (copy
+`.env.example`). Only three are required:
 
 ```env
-MONGODB_URL=mongodb://localhost:27017
-DATABASE_NAME=elies_system
-JWT_SECRET=your-secret-key-here
-JWT_ALGORITHM=HS256
-JWT_EXPIRATION_HOURS=24
-REDIS_URL=redis://localhost:6379/0
-CELERY_BROKER_URL=redis://localhost:6379/0
-CELERY_RESULT_BACKEND=redis://localhost:6379/0
+JWT_SECRET=<random string of 32+ characters>
+HOST_WORKSPACE_PATH=/absolute/path/to/workspace
+CONTAINER_WORKSPACE_PATH=/container-workspace
 ```
 
-### Docker Environment
-
-When running with Docker Compose, environment variables are automatically configured:
-
-```env
-MONGODB_URL=mongodb://mongodb:27017
-REDIS_URL=redis://redis:6379/0
-```
+Inside Docker Compose the service addresses (`MONGODB_URL=mongodb://mongo:27017`,
+`REDIS_HOST=redis`, `CBIR_SERVICE_HOST=cbir-service`, ...) are set by the
+compose files. Every setting and its default is listed in
+[development/configuration.md](development/configuration.md).
 
 ## Dependencies
 

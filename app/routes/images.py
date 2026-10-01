@@ -975,7 +975,7 @@ def list_all_image_types(
     current_user: dict = Depends(get_current_user)
 ):
     """
-    Deprecated: use GET /images/tags, which returns the same types as a list.
+    Use GET /images/tags instead: it returns the same types as a plain list.
 
     Get all unique image types used in the system
     

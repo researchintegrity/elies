@@ -1,690 +1,371 @@
 # ELIES API Reference
 
+This guide explains how to use the ELIES API: authentication, conventions and
+the main workflows. Two references are generated from the code and are always
+complete:
+
+- the **interactive reference** served by the API: `/docs` (Swagger UI) and
+  `/redoc`, with every request and response schema;
+- the **endpoint list** in [docs/api/endpoints.md](docs/api/endpoints.md),
+  regenerated with `python scripts/generate_api_reference.py` (a unit test
+  fails when it is out of date).
+
+All paths below are relative to the API root (`http://localhost:8000` by
+default). There is no `/api/v1` prefix.
+
+---
+
 ## Authentication
 
-All endpoints require JWT token (except `/auth/`).
+### Register and log in
 
-```bash
-# Add to request headers:
-Authorization: Bearer <token>
-```
-
-## Auth Endpoints
-
-### Register
-```
+```http
 POST /auth/register
 Content-Type: application/json
 
-{
-  "username": "user",
-  "email": "user@example.com",
-  "password": "password",
-  "full_name": "Full Name"
-}
+{"username": "alice", "email": "alice@example.org", "password": "a-long-passphrase", "full_name": "Alice"}
 ```
 
-### Login
-```
+```http
 POST /auth/login
 Content-Type: application/x-www-form-urlencoded
 
-username=user&password=password
+username=alice&password=a-long-passphrase
 ```
 
-Returns: `access_token`, `token_type`
+Both return `{"access_token": "...", "token_type": "bearer", "user": {...}}`.
+`username` may also be the account's email address. Registering a username or
+email that is already taken is `400`. Passwords need at least
+`PASSWORD_MIN_LENGTH` characters (12 by default) and at most 72 bytes.
 
-## User Endpoints
+Send the token on every other request:
 
-```
-GET /users/me                    # Get current user profile
-PUT /users/me                    # Update profile
-DELETE /users/me                 # Delete account
-```
-
-Request body for PUT:
-```json
-{
-  "full_name": "Updated Name",
-  "email": "new@example.com"
-}
+```http
+Authorization: Bearer <access_token>
 ```
 
-## Document Endpoints
+Media URLs used directly in `<img>` tags (`/images/{id}/thumbnail`,
+`/images/{id}/download`, `/analyses/{id}/results/{type}/download`) also accept
+the token as a `?token=` query parameter. Tokens are redacted from access logs.
 
-```
-POST /documents/upload           # Upload PDF
-GET /documents                   # List documents
-GET /documents/{doc_id}          # Get document details
-DELETE /documents/{doc_id}       # Delete document
-```
+### Token lifetime and revocation
 
-Upload:
-```
-POST /documents/upload
-Content-Type: multipart/form-data
+Tokens expire after `JWT_EXPIRATION_HOURS` (24 by default). They are revoked
+immediately when the user changes their password, deletes their account, or
+when an administrator changes their roles, resets their password or
+deactivates them. A revoked token gets `401`.
 
-file: <PDF file>
-```
-
-Returns: `document_id`, `filename`, `file_size`, `extraction_status`
-
-## Image Endpoints
-
-```
-GET /images                      # List images (paginated)
-GET /images/{image_id}           # Get image details
-DELETE /images/{image_id}        # Delete image
+```http
+PUT /users/me/password
+{"current_password": "...", "new_password": "..."}
 ```
 
-Response includes: `file_path`, `file_size`, `source_type` (extracted/uploaded/panel)
+returns a fresh token for the session that made the change.
 
-## Panel Extraction Endpoints
+### Limits
 
-### Initiate Extraction
+Repeated failed logins (per account and per IP) and registrations (per IP) are
+rate limited: the API answers `429` with a `Retry-After` header.
+
+### Administrators
+
+There is no default administrator. Create the first one from the server:
+
+```bash
+docker compose exec api python -m app.cli create-admin --username admin --email admin@example.org --generate-password
+docker compose exec api python -m app.cli promote --username alice   # make an existing user admin
 ```
+
+Admin endpoints live under `/admin` (user listing, quota, roles, password
+reset, activation, deletion, statistics and the audit log).
+
+---
+
+## Conventions
+
+| Topic | Rule |
+|---|---|
+| IDs | MongoDB ObjectIds as 24-character hex strings. A malformed ID is `400`. |
+| Ownership | Users only see their own resources; someone else's resource is `404`. |
+| Dates | ISO 8601 in UTC with an explicit offset, e.g. `2026-10-01T12:00:00Z`. |
+| Errors | `{"detail": "message"}`; validation errors (`422`) are `{"detail": [{"loc": [...], "msg": "...", "type": "..."}]}`. Unexpected errors are a generic `500` (details only in the server log). |
+| Request IDs | Every response has an `X-Request-ID` header. Send your own (letters, digits, `.`, `_`, `-`, up to 64) to correlate logs; it is stored on the jobs your request starts. |
+| Pagination | List endpoints take `page` (from 1) and `per_page`, and return the total and page count. |
+| Asynchronous work | Long operations answer `202 Accepted` and create a *job* (see [Jobs](#jobs)) and, for analyses, an *analysis* record to poll. |
+| Busy users | A user may have `MAX_ACTIVE_JOBS_PER_USER` (20) analysis jobs waiting or running; more are refused with `429`. |
+| Queue outage | If the task queue is down, endpoints that start work answer `503` and mark the job failed. |
+
+### Status codes
+
+| Code | Meaning |
+|---|---|
+| 200 / 201 / 204 | Success / created / deleted |
+| 202 | Accepted: the work continues in the background |
+| 400 | Invalid input (bad ID, file type, content) |
+| 401 | Missing, invalid, expired or revoked token |
+| 403 | Authenticated but not allowed (e.g. not an admin) |
+| 404 | Not found, or not yours |
+| 409 | Conflict with the current state of a resource |
+| 413 | Storage quota exceeded |
+| 422 | Request body or parameters fail validation |
+| 429 | Rate limited or too many active jobs |
+| 503 | A dependency (database, task queue, CBIR, Docker) is unavailable: retry later |
+
+### Storage quota
+
+Each user has a quota (`DEFAULT_USER_STORAGE_QUOTA_GB`, 1 GB by default;
+admins can change it per user). Everything stored in the user's workspace
+counts: uploads, extracted images, panels, thumbnails, analysis results and
+watermark-removed PDFs. Uploads are refused with `413` when they do not fit.
+Upload and list responses include `user_storage_used` and
+`user_storage_remaining`.
+
+---
+
+## Documents (PDF)
+
+```http
+POST /documents/upload            multipart/form-data, field "file"
+GET  /documents?page=1&per_page=12
+GET  /documents/{doc_id}
+GET  /documents/{doc_id}/images
+GET  /documents/{doc_id}/download
+DELETE /documents/{doc_id}
+```
+
+Uploading a PDF (max `PDF_MAX_SIZE_MB`, 500 MB by default) queues image
+extraction. Poll `GET /documents/{doc_id}` until `extraction_status` is
+`completed`, `completed_with_errors` or `failed`; `extracted_image_count`
+gives the result. Uploads are refused with `503` while CBIR is down, because
+the extracted images could not be indexed.
+
+Deleting a document deletes its extracted images and everything derived from
+them (panels, annotations, relationships, analyses, CBIR vectors).
+
+### Watermark removal
+
+```http
+POST /documents/{doc_id}/remove-watermark
+{"aggressiveness_mode": 2}
+
+GET /documents/{doc_id}/watermark-removal/status
+```
+
+Modes: `1` explicit watermarks, `2` text and repeated graphics, `3` all
+graphics. The cleaned PDF becomes a new document (`cleaned_document_id`).
+
+---
+
+## Images
+
+```http
+POST /images/upload?document_id=<optional>   multipart/form-data, field "file"
+POST /images/upload/batch                     multipart/form-data, fields "files"
+GET  /images/indexing-status/{job_id}         progress of a batch upload's indexing
+GET  /images?page=1&per_page=24&source_type=uploaded&flagged=true&search=fig
+GET  /images/ids                              IDs matching the same filters (select all)
+GET  /images/{image_id}
+GET  /images/{image_id}/thumbnail
+GET  /images/{image_id}/download
+PATCH /images/{image_id}/flag                 toggle "flagged for review"
+POST /images/{image_id}/types                 {"types": ["figure"]}
+DELETE /images/{image_id}/types/{type_name}
+GET  /images/tags                             all types used by the user
+DELETE /images/{image_id}
+```
+
+Accepted formats: PNG, JPEG, GIF, BMP, WebP, up to `IMAGE_MAX_SIZE_MB`
+(100 MB) and `MAX_IMAGE_PIXELS` pixels; the content must decode as an image.
+The client file name is kept only for display (`original_filename`).
+Images extracted from a PDF can only be deleted with their document (`403`).
+
+### Panel extraction
+
+```http
 POST /images/extract-panels
-Content-Type: application/json
+{"image_ids": ["<image id>", "..."], "model_type": "default"}
 
-{
-  "image_ids": ["id1", "id2"],
-  "model_type": "default"
-}
-```
-
-Returns: `202 Accepted` with `task_id`
-
-```json
-{
-  "task_id": "uuid-string",
-  "status": "PENDING",
-  "image_ids": ["id1", "id2"],
-  "message": "Panel extraction queued"
-}
-```
-
-### Check Status
-```
 GET /images/extract-panels/status/{task_id}
-```
-
-Returns:
-- `PENDING`: Still processing
-- `SUCCESS`: Complete with `extracted_panels` array
-- `FAILURE`: Failed with `error` message
-
-```json
-{
-  "task_id": "uuid",
-  "status": "SUCCESS",
-  "extracted_panels_count": 3,
-  "extracted_panels": [
-    {
-      "id": "panel_id",
-      "filename": "panel_00001.png",
-      "source_image_id": "image_id",
-      "panel_id": "1",
-      "panel_type": "Graphs",
-      "bbox": {
-        "x0": 92.0,
-        "y0": 48.0,
-        "x1": 629.0,
-        "y1": 430.0
-      }
-    }
-  ]
-}
-```
-
-### List Panels from Image
-```
 GET /images/{image_id}/panels
 ```
 
-Returns: Array of all panels extracted from source image
+At most `MAX_IMAGES_PER_EXTRACTION` (20) images per request. The status is
+`queued`, `processing`, `completed` (with `extracted_panels`) or `failed`
+(with `error`). Only the user who started an extraction can read its status.
 
-## Relationship Endpoints
+---
 
-Endpoints for managing manual and automatic relationships between images.
+## Analyses
 
-### Create Relationship
+Every analysis is stored as an analysis record. Start one, then poll
+`GET /analyses/{analysis_id}` (or follow its job) until `status` is
+`completed` or `failed`.
+
+```http
+POST /analyses/copy-move/single   {"image_id": "...", "method": "keypoint"}
+POST /analyses/copy-move/cross    {"source_image_id": "...", "target_image_id": "...", "method": "keypoint", "descriptor": "cv_rsift"}
+POST /analyses/trufor             {"image_id": "...", "save_noiseprint": false}
+POST /analyses/screening-tool     multipart: image_id, analysis_subtype, parameters (JSON object), notes, result_image (optional image)
+
+GET  /analyses?page=1&per_page=10&type=trufor&status=completed&source_image_id=...
+GET  /analyses/stats
+GET  /analyses/by-image/{image_id}
+GET  /analyses/{analysis_id}
+GET  /analyses/{analysis_id}/results/{result_type}/download
+DELETE /analyses/{analysis_id}
 ```
-POST /relationships
-Content-Type: application/json
 
-{
-    "image1_id": "id1",
-    "image2_id": "id2",
-    "source_type": "manual"
-}
+Copy-move `method` is `keypoint` (recommended) or `dense` (with
+`dense_method` 1-5). Screening-tool results come from the browser tools (ELA,
+noise analysis, ...) and are stored as completed analyses; the optional
+result image is validated and counted in the quota.
+
+### Content-based image retrieval (CBIR)
+
+```http
+POST /cbir/index          {"image_ids": ["..."], "labels": ["Western Blot"]}   (all images if image_ids is omitted)
+POST /cbir/search         {"image_id": "...", "top_k": 10, "labels": ["..."]}  -> analysis_id
+POST /cbir/search/sync    same body, answers with the matches
+POST /cbir/search/upload?top_k=10   multipart "file": search with an image that is not stored
+DELETE /cbir/index        {"image_ids": ["..."]}
+DELETE /cbir/index/all
+GET  /cbir/health
 ```
 
-Optional `weight` (0.0-1.0) can be provided. Defaults to 1.0.
+Uploaded and extracted images are indexed automatically. If indexing fails
+the image is kept and marked with `cbir_error`; it is never deleted.
 
-### Remove Relationship
+### Provenance analysis
+
+```http
+POST /provenance/analyze
+{"image_id": "...", "search_image_ids": null, "k": 10, "q": 5, "max_depth": 3, "descriptor_type": "cv_rsift"}
+
+GET /provenance/health
 ```
+
+Answers `202` with `analysis_id`; the results (provenance graph and spanning
+tree) are read with `GET /analyses/{analysis_id}`. The edges found are also
+stored as image relationships (`source_type: "provenance"`).
+
+---
+
+## Relationships
+
+```http
+POST   /relationships                         {"image1_id": "...", "image2_id": "...", "source_type": "manual", "weight": 1.0}
+GET    /relationships/image/{image_id}        direct relationships, with the other image's details
+GET    /relationships/image/{image_id}/graph?max_depth=5
 DELETE /relationships/{relationship_id}
 ```
 
-### Get Relationships for Image
-```
-GET /images/{image_id}/relationships
-```
+Relationships are undirected and unique per image pair: creating an existing
+one returns it (raising its weight if the new one is higher). Both images are
+flagged when a relationship is created.
 
-Returns list of direct relationships for the specified image.
+The graph endpoint returns `nodes`, `edges` and the maximum spanning tree
+(`mst_edges`, also marked with `is_mst_edge`). `max_depth=0` means unlimited.
+`total_nodes_count` is the size of the connected component, explored up to
+`RELATIONSHIP_GRAPH_MAX_NODES` (2000) images; `truncated` is `true` when that
+cap was reached.
 
-### Get Relationship Graph
-```
-GET /images/{image_id}/relationship-graph?max_depth=5
-```
+---
 
-Returns graph structure (nodes + edges) for visualization using BFS traversal.
+## Annotations
 
-**Query Parameters:**
-- `max_depth`: Maximum depth for BFS traversal (default: 5). Set to `0` for unlimited depth (traverse entire connected component).
+```http
+POST /annotations/single                 {"image_id": "...", "coords": {...}, "text": "", "type": "manipulation", "shape_type": "rectangle"}
+GET  /annotations/single?image_id=...
+GET  /annotations/single/{annotation_id}
+DELETE /annotations/single/{annotation_id}
 
-Response:
-```json
-{
-    "query_image_id": "id1",
-    "nodes": [
-        {"id": "id1", "label": "img1.png", "is_query": true, "is_flagged": true},
-        {"id": "id2", "label": "img2.png", "is_query": false, "is_flagged": true}
-    ],
-    "edges": [
-        {"source": "id1", "target": "id2", "weight": 1.0, "is_mst_edge": true}
-    ],
-    "mst_edges": [...]
-}
+POST /annotations/dual                   {"source_image_id": "...", "target_image_id": "...", "link_id": "...", "coords": {...}}
+POST /annotations/dual/batch             [ ...same objects... ]
+GET  /annotations/dual?source_image_id=...
+GET  /annotations/dual/linked-images/{image_id}
+GET|PUT|DELETE /annotations/dual/{annotation_id}
+PUT|DELETE /annotations/dual/by-link/{link_id}
 ```
 
-## CBIR Endpoints (Content-Based Image Retrieval)
+Single annotations mark a region of one image; dual annotations link a region
+of one image to a region of another (both sides share a `link_id`).
 
-CBIR allows searching for visually similar images within the user's collection.
+---
 
-### Index Images
-```
-POST /cbir/index
-Content-Type: application/json
+## Jobs
 
-{
-  "image_ids": ["id1", "id2"],
-  "labels": ["optional_label"]
-}
-```
-Indexes specified images (or all user images if `image_ids` is omitted).
+Every background operation (PDF extraction, analyses, panel extraction,
+watermark removal, batch uploads, deletions) has a job record.
 
-### Search Similar Images (Async)
-```
-POST /cbir/search
-Content-Type: application/json
-
-{
-  "image_id": "query_image_id",
-  "top_k": 10,
-  "labels": ["filter_label"]
-}
-```
-Starts an async search task. Returns `analysis_id` to poll status.
-
-### Search Similar Images (Sync)
-```
-POST /cbir/search/sync
-Content-Type: application/json
-
-{
-  "image_id": "query_image_id",
-  "top_k": 10
-}
-```
-Returns search results immediately.
-
-### Search by Upload
-```
-POST /cbir/search/upload?top_k=10
-Content-Type: multipart/form-data
-
-file: <Image file>
-```
-Search using an uploaded image without storing it.
-
-### Remove from Index
-```
-DELETE /cbir/index
-Content-Type: application/json
-
-{
-  "image_ids": ["id1", "id2"]
-}
+```http
+GET /jobs?page=1&per_page=20&job_type=trufor&status=processing
+GET /jobs/stats
+GET /jobs/{job_id}
+GET /jobs/stream            Server-Sent Events
 ```
 
-## Analysis Endpoints
+Job statuses: `pending`, `processing`, `completed`, `partial` (completed with
+errors) and `failed`. Jobs are deleted `JOB_RETENTION_DAYS` after they finish.
+Jobs whose worker died are marked failed automatically.
 
-General endpoints for various image analysis tasks.
+`/jobs/stream` sends one `data: {...}` event per change (`job_started`,
+`job_progress`, `job_completed`, `job_failed`) and a `: keepalive` comment
+every 30 seconds. Browsers' `EventSource` cannot send headers, so read it
+with `fetch` and the `Authorization` header.
 
-### Get Analysis Statistics
-```
-GET /analyses/stats
-```
-Returns counts by status for the current user's analyses.
+---
 
-### List Analyses Grouped by Image
-```
-GET /analyses/grouped-by-image?type=screening_tool&page=1&per_page=10
-```
-Returns analyses grouped by source image, useful for comparing multiple analysis runs on the same image.
+## Users
 
-**Query Parameters:**
-- `page`: Page number (default: 1)
-- `per_page`: Groups per page (1-50, default: 10)
-- `type`: Filter by analysis type (e.g., `screening_tool`)
-- `status`: Filter by status (`pending`, `processing`, `completed`, `failed`)
-- `subtype`: Filter by analysis subtype (e.g., `ela`, `noise`, `gradient`)
-- `source_image_id`: Filter by specific image
-- `sort_by`: Sort groups by `latest` (default), `count`, or `oldest`
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Retrieved 5 image groups with 23 total analyses",
-  "data": [
-    {
-      "source_image_id": "image_id_1",
-      "analysis_count": 5,
-      "subtypes": ["ela", "noise", "gradient"],
-      "analysis_types": ["screening_tool"],
-      "latest_analysis": "2025-12-27T10:30:00Z",
-      "oldest_analysis": "2025-12-25T08:00:00Z",
-      "analyses": [
-        {
-          "id": "analysis_id_1",
-          "type": "screening_tool",
-          "status": "completed",
-          "created_at": "2025-12-27T10:30:00Z",
-          "parameters": {"analysis_subtype": "ela", "quality": 90},
-          "results": {"result_image": "/path/to/result.png"}
-        }
-      ]
-    }
-  ],
-  "pagination": {
-    "current_page": 1,
-    "total_pages": 2,
-    "page_size": 10,
-    "total_groups": 15,
-    "total_analyses": 45
-  }
-}
+```http
+GET    /users/me
+PUT    /users/me                  {"full_name": "...", "email": "..."}
+PUT    /users/me/password         {"current_password": "...", "new_password": "..."}
+DELETE /users/me                  disables the account at once, deletes its data in the background
+GET    /users/{username}          admins only
 ```
 
-### Get Analysis Details
-```
-GET /analyses/{analysis_id}
-```
-Returns status and results for any analysis type (CBIR, Copy-Move, TruFor, Provenance).
+---
 
-### Copy-Move Detection (Single Image)
-```
-POST /analyses/copy-move/single
-Content-Type: application/json
+## Health
 
-{
-  "image_id": "id1",
-  "method": "keypoint",
-  "dense_method": 2
-}
-```
-Detects copied-and-pasted regions within a single image.
-
-**Parameters:**
-- `method`: Detection algorithm type
-  - `keypoint` (default): Advanced keypoint-based detection using SIFT/RootSIFT with geometric verification
-  - `dense`: Block-based dense matching
-- `dense_method`: Sub-variant for dense method (1-5), only used when `method="dense"`
-
-### Copy-Move Detection (Cross-Image)
-```
-POST /analyses/copy-move/cross
-Content-Type: application/json
-
-{
-  "source_image_id": "id1",
-  "target_image_id": "id2",
-  "method": "keypoint",
-  "dense_method": 2
-}
-```
-Detects if content from source image was copied to target image.
-
-**Parameters:**
-- `method`: Detection algorithm type
-  - `keypoint` (default, recommended for cross-image): Advanced keypoint-based detection
-  - `dense`: Block-based dense matching
-- `dense_method`: Sub-variant for dense method (1-5), only used when `method="dense"`
-
-### TruFor Forgery Detection
-```
-POST /analyses/trufor
-Content-Type: application/json
-
-{
-  "image_id": "id1"
-}
-```
-Analyzes a single image for manipulation traces using TruFor model.
-
-## Annotation Endpoints
-
-```
-GET /annotations                 # List annotations
-POST /annotations                # Create annotation
-GET /annotations/{anno_id}       # Get annotation
-PUT /annotations/{anno_id}       # Update annotation
-DELETE /annotations/{anno_id}    # Delete annotation
+```http
+GET /health/live     200 while the process runs
+GET /health/ready    200 when MongoDB and Redis are reachable, 503 otherwise
+GET /health          same as /health/ready
 ```
 
-## Provenance Analysis Endpoints
+Readiness answers never include error details; see the server log.
 
-Provenance analysis identifies content sharing relationships between images using keypoint matching and geometric verification.
+---
 
-### Start Provenance Analysis
-```
-POST /provenance/analyze
-Content-Type: application/json
+## Deprecated endpoints
 
-{
-  "query_image_ids": ["id1", "id2"],
-  "descriptor_type": "vlfeat_sift_heq",
-  "alignment_strategy": "CV_MAGSAC",
-  "min_area": 0.01,
-  "min_keypoints": 20,
-  "check_flip": true,
-  "top_k_retrieval": 50,
-  "max_depth": 2,
-  "max_queue_size": 100,
-  "same_label_only": false,
-  "labels_filter": null,
-  "search_scope": "user"
-}
-```
+The `/api/*` routes (`/api/documents`, `/api/images`, `/api/search`,
+`/api/dashboard/stats`, `/api/health`) duplicate the endpoints above with a
+different response envelope. They still work, answer with a
+`Deprecation: true` header and will be removed. `GET /images/types/all` is
+replaced by `GET /images/tags`.
 
-**Parameters:**
-- `query_image_ids` (required): List of image IDs to start analysis from
-- `descriptor_type`: Keypoint descriptor type (`vlfeat_sift_heq`, `opencv_sift`)
-- `alignment_strategy`: Geometric verification method (`CV_MAGSAC`, `CV_RANSAC`)
-- `min_area`: Minimum shared area ratio (0-1) for valid match
-- `min_keypoints`: Minimum keypoints required per image
-- `check_flip`: Check horizontally flipped images
-- `top_k_retrieval`: Number of similar images to retrieve from CBIR
-- `max_depth`: Maximum BFS traversal depth from query images
-- `max_queue_size`: Maximum images to process in queue
-- `same_label_only`: Only match images with same labels
-- `search_scope`: `"user"` (own images) or `"global"` (admin only)
+---
 
-Returns: `202 Accepted` with `analysis_id`
-
-```json
-{
-  "analysis_id": "uuid-string",
-  "status": "pending",
-  "status_url": "/api/v1/provenance/{analysis_id}",
-  "message": "Provenance analysis started for 2 query image(s)"
-}
-```
-
-### Get Analysis Status & Results
-```
-GET /provenance/{analysis_id}
-```
-
-Returns analysis status and results when complete:
-
-```json
-{
-  "id": "analysis_id",
-  "user_id": "user_id",
-  "status": "completed",
-  "query_image_ids": ["id1", "id2"],
-  "config": {...},
-  "created_at": "2025-01-01T00:00:00Z",
-  "completed_at": "2025-01-01T00:01:00Z",
-  "progress": {
-    "stage": "completed",
-    "images_processed": 15,
-    "matched_pairs": 8,
-    "processing_time_seconds": 45.2
-  },
-  "result": {
-    "graph_nodes": [
-      {"id": "image_id", "label": "filename.jpg", "is_query": true}
-    ],
-    "graph_edges": [
-      {"from": "id1", "to": "id2", "weight": 0.85, "is_flipped": false}
-    ],
-    "spanning_tree_edges": [...],
-    "connected_components": [[...], [...]],
-    "total_images_analyzed": 15,
-    "matched_pairs_count": 8,
-    "processing_time_seconds": 45.2
-  }
-}
-```
-
-### Get Graph Data
-```
-GET /provenance/{analysis_id}/graph
-```
-
-Returns structured graph data for visualization:
-
-```json
-{
-  "analysis_id": "uuid",
-  "nodes": [
-    {"id": "img1", "label": "image.jpg", "is_query": true}
-  ],
-  "edges": [
-    {"from": "img1", "to": "img2", "weight": 0.85}
-  ],
-  "spanning_tree_edges": [...],
-  "connected_components": [[...]],
-  "statistics": {
-    "total_images": 15,
-    "matched_pairs": 8,
-    "processing_time": 45.2
-  }
-}
-```
-
-### Get Visualization HTML
-```
-GET /provenance/{analysis_id}/visualization?width=800&height=600
-```
-
-Returns an embeddable HTML page with vis.js graph visualization.
-
-Query parameters:
-- `width`: Visualization width in pixels (400-2000)
-- `height`: Visualization height in pixels (300-1500)
-
-### List Analyses
-```
-GET /provenance/?skip=0&limit=20&status=completed
-```
-
-Returns paginated list of user's provenance analyses.
-
-### Delete Analysis
-```
-DELETE /provenance/{analysis_id}
-```
-
-### Precompute Descriptors
-```
-POST /provenance/precompute-descriptors?descriptor_type=vlfeat_sift_heq
-Content-Type: application/json
-
-["image_id1", "image_id2", "image_id3"]
-```
-
-Pre-warms descriptor cache for faster analysis.
-
-### Admin Endpoints
-
-#### Cross-User Analysis (Admin Only)
-```
-POST /provenance/admin/cross-user-analysis
-Content-Type: application/json
-
-{
-  "query_image_ids": ["id1"],
-  "target_user_ids": ["user1", "user2"],
-  "config": {...}
-}
-```
-
-Searches for image sharing across different users.
-
-#### Cleanup Old Descriptors (Admin Only)
-```
-POST /provenance/admin/cleanup-descriptors?days_old=30&user_id=optional_user
-```
-
-Removes cached descriptors older than specified days.
-
-## Common Response Codes
-
-| Code | Meaning |
-|------|---------|
-| 200 | Success |
-| 201 | Created |
-| 202 | Accepted (async) |
-| 400 | Bad request |
-| 401 | Unauthorized |
-| 403 | Forbidden |
-| 404 | Not found |
-| 409 | Conflict (duplicate) |
-| 422 | Validation error |
-| 500 | Server error |
-
-## Query Parameters
-
-Most list endpoints support:
-
-```
-?skip=0           # Pagination offset
-?limit=10         # Items per page
-?sort=field       # Sort by field
-```
-
-## Error Response Format
-
-```json
-{
-  "detail": "Error message describing what went wrong"
-}
-```
-
-Or for validation errors:
-
-```json
-{
-  "detail": [
-    {
-      "loc": ["body", "field_name"],
-      "msg": "Field validation error",
-      "type": "value_error"
-    }
-  ]
-}
-```
-
-## Example Workflow
-
-### 1. Register & Login
-```bash
-# Register
-curl -X POST http://localhost:8000/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{
-    "username": "scientist",
-    "email": "scientist@example.com",
-    "password": "secure123",
-    "full_name": "John Scientist"
-  }'
-
-# Login and save token
-TOKEN=$(curl -X POST http://localhost:8000/auth/login \
-  -H "Content-Type: application/x-www-form-urlencoded" \
-  -d "username=scientist&password=secure123" \
-  | jq -r '.access_token')
-```
-
-### 2. Upload Document
-```bash
-curl -X POST http://localhost:8000/documents/upload \
-  -H "Authorization: Bearer $TOKEN" \
-  -F "file=@research_paper.pdf"
-```
-
-### 3. Extract Panels
-```bash
-# Get image ID from document extraction
-IMAGE_ID="..."
-
-# Initiate panel extraction
-TASK=$(curl -X POST http://localhost:8000/images/extract-panels \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"image_ids": ["'$IMAGE_ID'"], "model_type": "default"}' \
-  | jq -r '.task_id')
-
-# Check status
-curl -X GET http://localhost:8000/images/extract-panels/status/$TASK \
-  -H "Authorization: Bearer $TOKEN" | jq .
-```
-
-## Rate Limiting
-
-No current rate limiting. Production deployment should add limits per user.
-
-## Async Operations
-
-Operations that process large files use async pattern:
-
-1. Send request
-2. Receive `202 Accepted` with `task_id`
-3. Poll status endpoint until complete
-4. Retrieve results when done
-
-Typical polling interval: 1-5 seconds
-
-## Pagination Example
+## Example workflow
 
 ```bash
-# Get first 10 images
-curl "http://localhost:8000/images?skip=0&limit=10" \
-  -H "Authorization: Bearer $TOKEN"
+API=http://localhost:8000
 
-# Get next 10
-curl "http://localhost:8000/images?skip=10&limit=10" \
-  -H "Authorization: Bearer $TOKEN"
+# Register (or log in) and keep the token
+TOKEN=$(curl -s -X POST $API/auth/register -H 'Content-Type: application/json' \
+  -d '{"username":"alice","email":"alice@example.org","password":"a-long-passphrase"}' | jq -r .access_token)
+AUTH="Authorization: Bearer $TOKEN"
+
+# Upload a PDF and wait for its images
+DOC=$(curl -s -X POST $API/documents/upload -H "$AUTH" -F file=@paper.pdf | jq -r ._id)
+curl -s $API/documents/$DOC -H "$AUTH" | jq .extraction_status
+curl -s "$API/documents/$DOC/images" -H "$AUTH" | jq '.[]._id'
+
+# Run TruFor on one of them and poll the analysis
+ANALYSIS=$(curl -s -X POST $API/analyses/trufor -H "$AUTH" -H 'Content-Type: application/json' \
+  -d "{\"image_id\":\"$IMAGE\"}" | jq -r .analysis_id)
+curl -s $API/analyses/$ANALYSIS -H "$AUTH" | jq .status
 ```
-
-## Storage Quota
-
-Each user has a storage quota (default 1GB). Responses include:
-
-```json
-{
-  "user_storage_used": 524288000,
-  "user_storage_remaining": 549453824
-}
-```
-
-Attempting to upload beyond quota returns `400 Bad Request`.
-
-## Interactive Exploration
-
-Open http://localhost:8000/docs for interactive API testing with Swagger UI.

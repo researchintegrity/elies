@@ -71,6 +71,13 @@ docker compose up -d
 ```bash
 docker compose -f docker-compose-prod.yml up -d --scale workers=5 
 ```
+For a server deployment (TLS, network exposure, backups), follow the [deployment guide](docs/development/deployment.md).
+
+#### 3.1 Create the first administrator
+There is no default account. Create an administrator (the generated password is printed once):
+```bash
+docker compose exec api python -m app.cli create-admin --username admin --email admin@example.org --generate-password
+```
 
 #### 4. Launch the frontend
 ```bash
@@ -84,6 +91,18 @@ After instalation, visit **[http://localhost:5173](http://localhost:5173)** to s
 > [!TIP]
 > **Need more details?**
 > Check our [Technical Overview](docs/TECHNICAL_OVERVIEW.md) for a deep dive into the architecture, manual installation, and API documentation.
+
+### Documentation
+
+| Topic | Where |
+|---|---|
+| Development setup and tests | [docs/development/setup.md](docs/development/setup.md), [docs/development/testing.md](docs/development/testing.md) |
+| Configuration (every setting) | [docs/development/configuration.md](docs/development/configuration.md) |
+| Deployment, backups, security | [docs/development/deployment.md](docs/development/deployment.md), [SECURITY.md](SECURITY.md) |
+| API guide and endpoint list | [API_REFERENCE.md](API_REFERENCE.md), [docs/api/endpoints.md](docs/api/endpoints.md), `/docs` on a running API |
+| Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
+
+The documentation can also be browsed as a site: `pip install -r requirements-docs.txt && mkdocs serve`.
 
 ### Upgrading from ELIS
 
