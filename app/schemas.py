@@ -1,8 +1,8 @@
 """
 Pydantic schemas for request/response validation
 """
-from pydantic import BaseModel, EmailStr, Field, StringConstraints, field_validator
-from datetime import datetime
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, StringConstraints, field_validator
+from datetime import datetime, timezone
 from typing import Annotated, Any, Dict, List, Literal, Optional
 from bson import ObjectId
 from enum import Enum
@@ -29,6 +29,11 @@ def _password_within_bcrypt_limit(value: Optional[str]) -> Optional[str]:
         raise ValueError(f"Password must be at most {PASSWORD_MAX_BYTES} bytes long")
     return value
 
+
+
+def utc_now() -> datetime:
+    """Current time as an aware UTC datetime."""
+    return datetime.now(timezone.utc)
 
 class UserRegister(BaseModel):
     """User registration data"""
@@ -70,13 +75,14 @@ class UserUpdate(BaseModel):
     full_name: Optional[str] = Field(None, max_length=FULL_NAME_MAX_LENGTH, description="User's full name")
     email: Optional[EmailStr] = Field(None, description="Valid email address")
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "full_name": "John Doe Updated",
                 "email": "newemail@example.com"
             }
-        }
+        },
+    )
 
 
 class UserResponse(BaseModel):
@@ -102,9 +108,9 @@ class UserResponse(BaseModel):
             return str(v)
         return v
 
-    class Config:
-        from_attributes = True
-        schema_extra = {
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "_id": "507f1f77bcf86cd799439011",
                 "username": "johndoe",
@@ -118,7 +124,8 @@ class UserResponse(BaseModel):
                 "updated_at": "2025-01-02T15:30:00",
                 "last_login_at": "2025-01-02T15:30:00"
             }
-        }
+        },
+    )
 
 
 class TokenResponse(BaseModel):
@@ -128,8 +135,8 @@ class TokenResponse(BaseModel):
     user: UserResponse
     expires_in: int
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
                 "token_type": "bearer",
@@ -144,19 +151,21 @@ class TokenResponse(BaseModel):
                 },
                 "expires_in": 86400
             }
-        }
+        },
+    )
 
 
 class MessageResponse(BaseModel):
     """Generic message response"""
     message: str
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "message": "Operation completed successfully"
             }
-        }
+        },
+    )
 
 
 class ErrorResponse(BaseModel):
@@ -164,13 +173,14 @@ class ErrorResponse(BaseModel):
     error: str
     status_code: int
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "error": "Username or email already registered",
                 "status_code": 400
             }
-        }
+        },
+    )
 
 
 # ============================================================================
@@ -184,15 +194,16 @@ class DocumentCreate(BaseModel):
     file_path: str
     file_size: int
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "user_id": "507f1f77bcf86cd799439011",
                 "filename": "research_paper.pdf",
                 "file_path": "/workspace/507f1f77bcf86cd799439011/pdfs/1730000000_research_paper.pdf",
                 "file_size": 2048576
             }
-        }
+        },
+    )
 
 
 class ExtractedImageInfo(BaseModel):
@@ -226,9 +237,9 @@ class DocumentResponse(BaseModel):
             return str(v)
         return v
 
-    class Config:
-        from_attributes = True
-        json_schema_extra = {
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "_id": "507f1f77bcf86cd799439012",
                 "user_id": "507f1f77bcf86cd799439011",
@@ -242,7 +253,8 @@ class DocumentResponse(BaseModel):
                 "user_storage_used": 524288000,
                 "user_storage_remaining": 549453824
             }
-        }
+        },
+    )
 
 
 class PaginatedDocumentResponse(BaseModel):
@@ -255,8 +267,8 @@ class PaginatedDocumentResponse(BaseModel):
     has_next: bool = Field(description="Whether there is a next page")
     has_prev: bool = Field(description="Whether there is a previous page")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "items": [],
                 "total": 50,
@@ -266,7 +278,8 @@ class PaginatedDocumentResponse(BaseModel):
                 "has_next": True,
                 "has_prev": False
             }
-        }
+        },
+    )
 
 
 # ============================================================================
@@ -283,8 +296,8 @@ class ImageCreate(BaseModel):
     document_id: Optional[str] = Field(None, description="Reference to document if extracted")
     exif_metadata: Optional[Dict[str, Any]] = Field(None, description="EXIF metadata extracted from image")
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "user_id": "507f1f77bcf86cd799439011",
                 "filename": "figure_1.png",
@@ -294,7 +307,8 @@ class ImageCreate(BaseModel):
                 "document_id": "507f1f77bcf86cd799439012",
                 "exif_metadata": {"Make": "Canon", "Model": "Canon EOS 5D Mark IV"}
             }
-        }
+        },
+    )
 
 
 class ImageResponse(BaseModel):
@@ -340,9 +354,9 @@ class ImageResponse(BaseModel):
             return str(v)
         return v
 
-    class Config:
-        from_attributes = True
-        schema_extra = {
+    model_config = ConfigDict(
+        from_attributes=True,
+        json_schema_extra={
             "example": {
                 "_id": "507f1f77bcf86cd799439013",
                 "user_id": "507f1f77bcf86cd799439011",
@@ -364,7 +378,8 @@ class ImageResponse(BaseModel):
                 "user_storage_used": 524288000,
                 "user_storage_remaining": 549453824
             }
-        }
+        },
+    )
 
 
 class PaginatedImageResponse(BaseModel):
@@ -377,8 +392,8 @@ class PaginatedImageResponse(BaseModel):
     has_next: bool = Field(description="Whether there is a next page")
     has_prev: bool = Field(description="Whether there is a previous page")
     
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "items": [],
                 "total": 150,
@@ -388,7 +403,8 @@ class PaginatedImageResponse(BaseModel):
                 "has_next": True,
                 "has_prev": False
             }
-        }
+        },
+    )
 
 
 # ============================================================================
@@ -400,25 +416,27 @@ class ImageTypeListResponse(BaseModel):
     types: List[str] = Field(description="List of all unique image types used in system")
     count: int = Field(description="Total number of unique types")
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "types": ["figure", "table", "equation", "text"],
                 "count": 4
             }
-        }
+        },
+    )
 
 
 class ImageTypesUpdateRequest(BaseModel):
     """Request to add types to an image"""
     types: List[Label] = Field(..., min_length=1, max_length=MAX_LABELS, description="List of types to add (duplicates ignored)")
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "types": ["figure", "graph"]
             }
-        }
+        },
+    )
 
 
 # ============================================================================
@@ -431,10 +449,10 @@ class ApiResponse(BaseModel):
     message: str = Field(..., description="Response message")
     data: Optional[dict] = Field(None, description="Response data payload")
     errors: Optional[list] = Field(None, description="List of errors if any")
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Response timestamp")
+    timestamp: datetime = Field(default_factory=utc_now, description="Response timestamp")
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "success": True,
                 "message": "Operation completed successfully",
@@ -442,7 +460,8 @@ class ApiResponse(BaseModel):
                 "errors": None,
                 "timestamp": "2025-01-01T10:00:00"
             }
-        }
+        },
+    )
 
 
 class PaginatedResponse(BaseModel):
@@ -451,10 +470,10 @@ class PaginatedResponse(BaseModel):
     message: str = Field(..., description="Response message")
     data: list = Field(..., description="List of items")
     pagination: dict = Field(..., description="Pagination metadata")
-    timestamp: datetime = Field(default_factory=datetime.utcnow, description="Response timestamp")
+    timestamp: datetime = Field(default_factory=utc_now, description="Response timestamp")
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "success": True,
                 "message": "Items retrieved successfully",
@@ -467,7 +486,8 @@ class PaginatedResponse(BaseModel):
                 },
                 "timestamp": "2025-01-01T10:00:00"
             }
-        }
+        },
+    )
 
 
 # ============================================================================
@@ -488,15 +508,16 @@ class CoordinateInfo(BaseModel):
     height: float = Field(0, description="Height (percentage)")
     points: Optional[List[PolygonPoint]] = Field(None, description="Polygon points (for polygon shapes)")
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "x": 25.5,
                 "y": 30.1,
                 "width": 10.2,
                 "height": 15.8
             }
-        }
+        },
+    )
 
 
 # Legacy Annotation Schemas removed per user request
@@ -515,8 +536,8 @@ class SingleAnnotationCreate(BaseModel):
     type: Optional[str] = Field("manipulation", description="Annotation type/label")
     shape_type: Optional[Literal["rectangle", "ellipse", "polygon"]] = Field("rectangle", description="Shape type")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "image_id": "507f1f77bcf86cd799439013",
                 "text": "Detected manipulation region",
@@ -524,7 +545,8 @@ class SingleAnnotationCreate(BaseModel):
                 "type": "manipulation",
                 "shape_type": "rectangle"
             }
-        }
+        },
+    )
 
 
 class SingleAnnotationResponse(BaseModel):
@@ -539,9 +561,10 @@ class SingleAnnotationResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
-        populate_by_name = True
+    model_config = ConfigDict(
+        from_attributes=True,
+        populate_by_name=True,
+    )
 
 
 # ============================================================================
@@ -559,8 +582,8 @@ class DualAnnotationCreate(BaseModel):
     text: str = Field("", max_length=1000, description="Annotation text/description")
     shape_type: Optional[Literal["rectangle", "ellipse", "polygon"]] = Field("rectangle", description="Shape type")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "source_image_id": "507f1f77bcf86cd799439013",
                 "target_image_id": "507f1f77bcf86cd799439014",
@@ -571,7 +594,8 @@ class DualAnnotationCreate(BaseModel):
                 "text": "Matched region",
                 "shape_type": "rectangle"
             }
-        }
+        },
+    )
 
 
 class DualAnnotationResponse(BaseModel):
@@ -589,17 +613,18 @@ class DualAnnotationResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
-        populate_by_name = True
+    model_config = ConfigDict(
+        from_attributes=True,
+        populate_by_name=True,
+    )
 
 
 class DualAnnotationBatchCreate(BaseModel):
     """Batch create dual annotations"""
     annotations: List[DualAnnotationCreate] = Field(..., min_length=1, max_length=100, description="List of dual annotations to create")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "annotations": [
                     {
@@ -612,7 +637,8 @@ class DualAnnotationBatchCreate(BaseModel):
                     }
                 ]
             }
-        }
+        },
+    )
 
 
 class DualAnnotationUpdate(BaseModel):
@@ -622,14 +648,15 @@ class DualAnnotationUpdate(BaseModel):
     pair_color: Optional[str] = Field(None, description="Updated pair color hex code")
     text: Optional[str] = Field(None, max_length=1000, description="Updated annotation text")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "coords": {"x": 30.0, "y": 35.0, "width": 12.0, "height": 18.0},
                 "pair_name": "Renamed Pair",
                 "pair_color": "#3B82F6"
             }
-        }
+        },
+    )
 
 
 # ============================================================================
@@ -645,12 +672,13 @@ class WatermarkRemovalRequest(BaseModel):
         description="Watermark removal aggressiveness (1=explicit only, 2=text+graphics, 3=all graphics)"
     )
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "aggressiveness_mode": 2
             }
-        }
+        },
+    )
 
 
 class WatermarkRemovalInitiationResponse(BaseModel):
@@ -661,8 +689,8 @@ class WatermarkRemovalInitiationResponse(BaseModel):
     aggressiveness_mode: int
     message: str
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "document_id": "507f1f77bcf86cd799439012",
                 "task_id": "abc123def456",
@@ -670,7 +698,8 @@ class WatermarkRemovalInitiationResponse(BaseModel):
                 "aggressiveness_mode": 2,
                 "message": "Watermark removal queued with mode 2"
             }
-        }
+        },
+    )
 
 
 class WatermarkRemovalStatusResponse(BaseModel):
@@ -686,8 +715,8 @@ class WatermarkRemovalStatusResponse(BaseModel):
     cleaned_document_id: Optional[str] = None
     error: Optional[str] = None
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "document_id": "507f1f77bcf86cd799439012",
                 "status": "completed",
@@ -700,7 +729,8 @@ class WatermarkRemovalStatusResponse(BaseModel):
                 "cleaned_document_id": "507f1f77bcf86cd799439015",
                 "error": None
             }
-        }
+        },
+    )
 
 
 # ============================================================================
@@ -718,13 +748,14 @@ class PanelExtractionRequest(BaseModel):
         description="Optional YOLO model selection"
     )
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "image_ids": ["507f1f77bcf86cd799439013", "507f1f77bcf86cd799439014"],
                 "model_type": "default"
             }
-        }
+        },
+    )
 
 
 class PanelExtractionInitiationResponse(BaseModel):
@@ -734,15 +765,16 @@ class PanelExtractionInitiationResponse(BaseModel):
     image_ids: list[str]
     message: str
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "task_id": "abc123def456xyz",
                 "status": "queued",
                 "image_ids": ["507f1f77bcf86cd799439013", "507f1f77bcf86cd799439014"],
                 "message": "Panel extraction queued for 2 images"
             }
-        }
+        },
+    )
 
 
 class PanelExtractionStatusResponse(BaseModel):
@@ -757,8 +789,8 @@ class PanelExtractionStatusResponse(BaseModel):
     message: Optional[str] = None
     error: Optional[str] = None
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "task_id": "abc123def456xyz",
                 "status": "completed",
@@ -787,7 +819,8 @@ class PanelExtractionStatusResponse(BaseModel):
                 "message": "Panel extraction successful. Extracted 3 panels",
                 "error": None
             }
-        }
+        },
+    )
 
 
 # ============================================================================
@@ -799,13 +832,14 @@ class CBIRIndexRequest(BaseModel):
     image_ids: Optional[List[str]] = Field(None, max_length=MAX_IDS_PER_REQUEST, description="Specific image IDs to index. If None, indexes all user images.")
     labels: Optional[List[Label]] = Field(None, max_length=MAX_LABELS, description="Labels to apply to indexed images")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "image_ids": ["507f1f77bcf86cd799439013", "507f1f77bcf86cd799439014"],
                 "labels": ["Western Blot", "Microscopy"]
             }
-        }
+        },
+    )
 
 
 class CBIRSearchRequest(BaseModel):
@@ -814,14 +848,15 @@ class CBIRSearchRequest(BaseModel):
     top_k: int = Field(10, ge=1, le=100, description="Number of similar images to return")
     labels: Optional[List[Label]] = Field(None, max_length=MAX_LABELS, description="Filter results by labels")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "image_id": "507f1f77bcf86cd799439013",
                 "top_k": 10,
                 "labels": ["Western Blot"]
             }
-        }
+        },
+    )
 
 
 class CBIRSearchResult(BaseModel):
@@ -853,12 +888,13 @@ class CBIRDeleteRequest(BaseModel):
     """Request to delete images from CBIR index"""
     image_ids: List[str] = Field(..., min_length=1, max_length=MAX_IDS_PER_REQUEST, description="Image IDs to remove from index")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "image_ids": ["507f1f77bcf86cd799439013", "507f1f77bcf86cd799439014"]
             }
-        }
+        },
+    )
 
 
 class CBIRStatusResponse(BaseModel):
@@ -894,12 +930,12 @@ class IndexingJobResponse(BaseModel):
     progress_percent: float = Field(0.0, description="Progress percentage (0-100)")
     current_step: str = Field("", description="Current processing step description")
     errors: List[str] = Field(default_factory=list, description="List of error messages")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     completed_at: Optional[datetime] = Field(None, description="Completion timestamp")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "job_id": "idx_507f1f77bcf86cd799439011_1704393600",
                 "user_id": "507f1f77bcf86cd799439011",
@@ -915,7 +951,8 @@ class IndexingJobResponse(BaseModel):
                 "updated_at": "2025-01-04T18:01:30Z",
                 "completed_at": None
             }
-        }
+        },
+    )
 
 
 class BatchUploadResponse(BaseModel):
@@ -925,15 +962,16 @@ class BatchUploadResponse(BaseModel):
     image_ids: List[str] = Field(..., description="MongoDB IDs of uploaded images")
     message: str = Field(..., description="Status message")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "job_id": "idx_507f1f77bcf86cd799439011_1704393600",
                 "uploaded_count": 5,
                 "image_ids": ["507f1f77bcf86cd799439013", "507f1f77bcf86cd799439014"],
                 "message": "5 images uploaded, indexing in progress"
             }
-        }
+        },
+    )
 
 
 # ============================================================================
@@ -979,14 +1017,14 @@ class JobLogResponse(BaseModel):
     input_data: Optional[Dict[str, Any]] = Field(None, description="Job input parameters")
     output_data: Optional[Dict[str, Any]] = Field(None, description="Job results summary")
     errors: List[str] = Field(default_factory=list, description="Error messages if any")
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     started_at: Optional[datetime] = Field(None, description="When processing started")
     completed_at: Optional[datetime] = Field(None, description="When job completed")
     expires_at: Optional[datetime] = Field(None, description="When job log will be deleted")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "job_id": "job_507f1f77bcf86cd799439011_1704393600_abc12345",
                 "user_id": "507f1f77bcf86cd799439011",
@@ -1001,7 +1039,8 @@ class JobLogResponse(BaseModel):
                 "completed_at": "2025-01-04T18:01:30Z",
                 "expires_at": "2025-01-11T18:01:30Z"
             }
-        }
+        },
+    )
 
 
 class JobListResponse(BaseModel):
@@ -1063,8 +1102,8 @@ class AnalysisBase(BaseModel):
     """Base analysis model"""
     type: AnalysisType
     user_id: str
-    created_at: datetime = Field(default_factory=datetime.utcnow)
-    updated_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
     status: AnalysisStatus = AnalysisStatus.PENDING
     error: Optional[str] = None
     parameters: Optional[Dict[str, Any]] = Field(
@@ -1117,7 +1156,7 @@ class AnalysisResult(BaseModel):
     method: Optional[Any] = None
     dense_method: Optional[int] = None  # Sub-method for dense detection (1-5)
     descriptor: Optional[str] = None  # Keypoint descriptor type (cv_sift, cv_rsift, vlfeat_sift_heq)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=utc_now)
     matches_image: Optional[str] = None
     clusters_image: Optional[str] = None
     visualization: Optional[str] = None
@@ -1136,8 +1175,9 @@ class AnalysisResult(BaseModel):
     matches_count: Optional[int] = None
     matches: Optional[List[CBIRSearchResult]] = None
 
-    class Config:
-        extra = "allow"
+    model_config = ConfigDict(
+        extra="allow",
+    )
 
 
 class AnalysisResponse(AnalysisBase):
@@ -1155,9 +1195,10 @@ class AnalysisResponse(AnalysisBase):
             return str(v)
         return v
 
-    class Config:
-        json_encoders = {ObjectId: str}
-        populate_by_name = True
+    model_config = ConfigDict(
+        json_encoders={ObjectId: str},
+        populate_by_name=True,
+    )
 
 
 # ============================================================================
@@ -1187,9 +1228,10 @@ class AdminUserResponse(BaseModel):
             return str(v)
         return v
 
-    class Config:
-        from_attributes = True
-        populate_by_name = True
+    model_config = ConfigDict(
+        from_attributes=True,
+        populate_by_name=True,
+    )
 
 
 class AdminUserListResponse(BaseModel):
@@ -1209,12 +1251,13 @@ class AdminUpdateQuotaRequest(BaseModel):
         description="New storage limit in bytes (must be positive)"
     )
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "storage_limit_bytes": 5368709120  # 5 GB
             }
-        }
+        },
+    )
 
 
 class AdminUpdateRoleRequest(BaseModel):
@@ -1237,12 +1280,13 @@ class AdminUpdateRoleRequest(BaseModel):
             v = ["user"] + v  # Always include 'user' base role
         return list(set(v))  # Remove duplicates
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "roles": ["user", "admin"]
             }
-        }
+        },
+    )
 
 
 class AdminResetPasswordRequest(BaseModel):
@@ -1255,12 +1299,13 @@ class AdminResetPasswordRequest(BaseModel):
 
     _check_password = field_validator("new_password")(classmethod(lambda cls, v: _password_within_bcrypt_limit(v)))
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "new_password": "NewSecurePassword123"
             }
-        }
+        },
+    )
 
 
 class AdminResetPasswordResponse(BaseModel):
@@ -1276,12 +1321,13 @@ class AdminUpdateUserStatusRequest(BaseModel):
     """Request to activate/deactivate a user"""
     is_active: bool = Field(..., description="Set to true to activate, false to deactivate")
 
-    class Config:
-        schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "is_active": False
             }
-        }
+        },
+    )
 
 
 # ============================================================================
@@ -1319,15 +1365,16 @@ class ImageRelationshipCreate(BaseModel):
         description="Additional context (matched keypoints, shared area, etc.)"
     )
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "image1_id": "507f1f77bcf86cd799439013",
                 "image2_id": "507f1f77bcf86cd799439014",
                 "source_type": "manual",
                 "weight": 1.0
             }
-        }
+        },
+    )
 
 
 class ImageRelationshipResponse(BaseModel):
@@ -1356,10 +1403,10 @@ class ImageRelationshipResponse(BaseModel):
             return str(v)
         return v
 
-    class Config:
-        from_attributes = True
-        populate_by_name = True
-        json_schema_extra = {
+    model_config = ConfigDict(
+        from_attributes=True,
+        populate_by_name=True,
+        json_schema_extra={
             "example": {
                 "_id": "507f1f77bcf86cd799439015",
                 "user_id": "507f1f77bcf86cd799439011",
@@ -1370,7 +1417,8 @@ class ImageRelationshipResponse(BaseModel):
                 "created_at": "2025-01-01T10:00:00",
                 "created_by": "system"
             }
-        }
+        },
+    )
 
 
 class RelationshipGraphNode(BaseModel):
@@ -1380,15 +1428,16 @@ class RelationshipGraphNode(BaseModel):
     is_flagged: bool = Field(default=False, description="Whether image is flagged")
     is_query: bool = Field(default=False, description="Whether this is the query image")
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "id": "507f1f77bcf86cd799439013",
                 "label": "figure_1.png",
                 "is_flagged": True,
                 "is_query": True
             }
-        }
+        },
+    )
 
 
 class RelationshipGraphEdge(BaseModel):
@@ -1403,8 +1452,8 @@ class RelationshipGraphEdge(BaseModel):
         description="Whether part of Maximum Spanning Tree (render darker)"
     )
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "source": "507f1f77bcf86cd799439013",
                 "target": "507f1f77bcf86cd799439014",
@@ -1412,7 +1461,8 @@ class RelationshipGraphEdge(BaseModel):
                 "source_type": "provenance",
                 "is_mst_edge": True
             }
-        }
+        },
+    )
 
 
 class RelationshipGraphResponse(BaseModel):
@@ -1439,8 +1489,8 @@ class RelationshipGraphResponse(BaseModel):
         description="True if exploration stopped at RELATIONSHIP_GRAPH_MAX_NODES"
     )
 
-    class Config:
-        json_schema_extra = {
+    model_config = ConfigDict(
+        json_schema_extra={
             "example": {
                 "query_image_id": "507f1f77bcf86cd799439013",
                 "nodes": [
@@ -1456,4 +1506,5 @@ class RelationshipGraphResponse(BaseModel):
                      "weight": 0.85, "source_type": "provenance", "is_mst_edge": True}
                 ]
             }
-        }
+        },
+    )

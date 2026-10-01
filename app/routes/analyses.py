@@ -16,7 +16,7 @@ from app.services.deletion_service import delete_analyses
 from app.services.resource_helpers import get_owned_resource
 from app.services.job_logger import create_job_log, ensure_job_capacity
 from app.services.task_submission import submit_task
-from datetime import datetime
+from datetime import datetime, timezone
 from bson import ObjectId
 from pathlib import Path
 from typing import Optional
@@ -418,8 +418,8 @@ def analyze_copy_move_single(
         "user_id": user_id_str,
         "source_image_id": request.image_id,
         "status": AnalysisStatus.PENDING,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
         "parameters": parameters,
         # Keep legacy fields for backward compatibility
         "method": request.method.value,
@@ -509,8 +509,8 @@ def analyze_copy_move_cross(
         "source_image_id": request.source_image_id,
         "target_image_id": request.target_image_id,
         "status": AnalysisStatus.PENDING,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
         "parameters": parameters,
         # Keep legacy fields for backward compatibility
         "method": request.method.value,
@@ -596,8 +596,8 @@ def analyze_trufor(
         "user_id": user_id_str,
         "source_image_id": request.image_id,
         "status": AnalysisStatus.PENDING,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
         "parameters": parameters
     }
     result = analyses_col.insert_one(analysis_doc)
@@ -697,7 +697,7 @@ def save_screening_tool_analysis(
 
     analysis_oid = ObjectId()
     analysis_id = str(analysis_oid)
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     analysis_doc = {
         "_id": analysis_oid,
         "type": AnalysisType.SCREENING_TOOL,

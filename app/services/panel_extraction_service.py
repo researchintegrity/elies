@@ -6,6 +6,7 @@ from typing import Dict, List, Any
 from bson import ObjectId
 from app.db.mongodb import get_images_collection
 from app.exceptions import ResourceNotFoundError, ValidationError
+from app.services.storage_service import user_quota_fields
 from app.services.resource_helpers import get_owned_resource
 from app.schemas import JobType
 from app.services.job_logger import create_job_log, ensure_job_capacity, find_job_by_celery_task
@@ -127,20 +128,11 @@ def get_panel_extraction_status(
 
             if result_panel_ids:
                 try:
-                    images_col = get_images_collection()
-                    extracted_panels = []
-
-                    for panel_id in result_panel_ids:
-                        panel_doc = images_col.find_one(
-                            {"_id": ObjectId(panel_id), "user_id": user_id}
-                        )
-
-                        if panel_doc:
-                            # Convert to response format
-                            panel_response = _convert_document_to_response(panel_doc)
-                            extracted_panels.append(panel_response)
-
-                    response["extracted_panels"] = extracted_panels
+                    quota = user_quota_fields(user_id)
+                    panels = get_images_collection().find(
+                        {"_id": {"$in": [ObjectId(pid) for pid in result_panel_ids]}, "user_id": user_id}
+                    )
+                    response["extracted_panels"] = [_convert_document_to_response(doc, quota) for doc in panels]
 
                 except Exception as e:
                     logger.error("Error retrieving extracted panels: %s", str(e))
@@ -184,10 +176,8 @@ def get_panels_by_source_image(
             "user_id": user_id
         })
 
-        result = []
-        for panel_doc in panels:
-            panel_response = _convert_document_to_response(panel_doc)
-            result.append(panel_response)
+        quota = user_quota_fields(user_id)
+        result = [_convert_document_to_response(panel_doc, quota) for panel_doc in panels]
 
         logger.debug("Found %s panels for source image %s", len(result), source_image_id)
         return result
@@ -219,11 +209,12 @@ def _normalize_task_state(state: str) -> str:
     return state_mapping.get(state, "unknown")
 
 
-def _convert_document_to_response(doc: Dict[str, Any]) -> Dict[str, Any]:
+def _convert_document_to_response(doc: Dict[str, Any], quota: Dict[str, int]) -> Dict[str, Any]:
     """Convert MongoDB document to response format.
 
     Args:
         doc: MongoDB document
+        quota: user_storage_used / user_storage_remaining of the owner
 
     Returns:
         Dictionary formatted for API response with _id field (for Pydantic alias)
@@ -241,6 +232,5 @@ def _convert_document_to_response(doc: Dict[str, Any]) -> Dict[str, Any]:
         "panel_type": doc.get("panel_type"),
         "bbox": doc.get("bbox"),
         "uploaded_date": doc.get("uploaded_date"),
-        "user_storage_used": 0,
-        "user_storage_remaining": 1073741824
+        **quota,
     }

@@ -10,7 +10,7 @@ import heapq
 import itertools
 import logging
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from bson import ObjectId
@@ -75,7 +75,7 @@ def create_relationship(
         "source_analysis_id": source_analysis_id,
         "weight": weight,
         "metadata": metadata or {},
-        "created_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
         "created_by": created_by,
     }
     for attempt in range(2):

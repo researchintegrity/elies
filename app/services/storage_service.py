@@ -74,6 +74,14 @@ def quota_fields(user_id: str, limit: int) -> Dict[str, int]:
     return {"user_storage_used": used, "user_storage_remaining": max(0, limit - used)}
 
 
+def user_quota_fields(user_id: str) -> Dict[str, int]:
+    """quota_fields() when only the user id is at hand (one query)."""
+    user = get_users_collection().find_one({"_id": ObjectId(user_id)},
+                                           {"storage_used_bytes": 1, "storage_limit_bytes": 1}) or {}
+    used = max(0, user.get("storage_used_bytes", 0))
+    return {"user_storage_used": used, "user_storage_remaining": max(0, storage_limit(user) - used)}
+
+
 def reserve_storage(user: dict, size: int) -> None:
     """
     Atomically charge ``size`` bytes to the user if it fits in their quota.

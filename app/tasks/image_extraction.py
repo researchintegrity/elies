@@ -2,7 +2,7 @@
 Image extraction tasks for async processing
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Tuple
 
@@ -80,7 +80,7 @@ def _register_extracted_images(doc_id: str, user_id: str, extracted_files: List[
                 "extraction_mode": metadata.get("extraction_mode"),
                 "original_filename": original_filename,
                 "image_type": [],
-                "uploaded_date": datetime.utcnow(),
+                "uploaded_date": datetime.now(timezone.utc),
                 "exif_metadata": extract_exif_metadata(stored_path),
             })
             registered.append({
@@ -126,14 +126,14 @@ def extract_images_from_document(self, doc_id: str, user_id: str, pdf_path: str,
         documents_col.update_one(
             {"_id": ObjectId(doc_id)},
             {"$set": {"extraction_status": "failed", "extraction_errors": [message],
-                      "extraction_completed_at": datetime.utcnow()}},
+                      "extraction_completed_at": datetime.now(timezone.utc)}},
         )
 
     try:
         job.start("Starting extraction...")
         documents_col.update_one(
             {"_id": ObjectId(doc_id)},
-            {"$set": {"extraction_status": "processing", "extraction_started_at": datetime.utcnow(),
+            {"$set": {"extraction_status": "processing", "extraction_started_at": datetime.now(timezone.utc),
                       "extraction_retry_count": self.request.retries}},
         )
         _discard_previous_attempt(doc_id, user_id)
@@ -164,7 +164,7 @@ def extract_images_from_document(self, doc_id: str, user_id: str, pdf_path: str,
             "extracted_image_count": len(registered),
             "extracted_images": registered,
             "extraction_errors": errors,
-            "extraction_completed_at": datetime.utcnow(),
+            "extraction_completed_at": datetime.now(timezone.utc),
         }},
     )
 
@@ -189,5 +189,5 @@ def extract_images_from_document(self, doc_id: str, user_id: str, pdf_path: str,
         "status": extraction_status,
         "extracted_count": len(registered),
         "errors": errors,
-        "completed_at": datetime.utcnow().isoformat(),
+        "completed_at": datetime.now(timezone.utc).isoformat(),
     }

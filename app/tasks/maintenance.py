@@ -3,7 +3,7 @@ Maintenance tasks: account deletion, reaping jobs abandoned by dead workers
 and reconciling storage usage with the disk.
 """
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 
 from app.celery_config import celery_app
@@ -42,7 +42,7 @@ def reap_stale_jobs(now: Optional[datetime] = None) -> Dict[str, int]:
     Celery hard time limit) and queued work older than STALE_PENDING_HOURS
     can only belong to a worker that died, e.g. out of memory or redeployed.
     """
-    now = now or datetime.utcnow()
+    now = now or datetime.now(timezone.utc)
     processing_cutoff = now - timedelta(minutes=STALE_PROCESSING_MINUTES)
     pending_cutoff = now - timedelta(hours=STALE_PENDING_HOURS)
     stale = {"$or": [

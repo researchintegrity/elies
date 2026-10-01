@@ -7,7 +7,7 @@ fails because the broker is down, both are marked failed instead of
 staying "pending" forever, and the client gets HTTP 503.
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from bson import ObjectId
@@ -40,7 +40,7 @@ def submit_task(task, task_kwargs: dict, *, owner_id: str, job_id: Optional[str]
             get_analyses_collection().update_one(
                 {"_id": ObjectId(analysis_id)},
                 {"$set": {"status": AnalysisStatus.FAILED, "error": "Task queue unavailable",
-                          "updated_at": datetime.utcnow()}},
+                          "updated_at": datetime.now(timezone.utc)}},
             )
         raise TransientError(QUEUE_UNAVAILABLE) from e
 

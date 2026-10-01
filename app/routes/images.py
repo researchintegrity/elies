@@ -4,7 +4,7 @@ Image upload routes for extracted and user-uploaded image management
 import logging
 import math
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
@@ -52,7 +52,7 @@ from app.services.panel_extraction_service import (
     get_panels_by_source_image,
     initiate_panel_extraction,
 )
-from app.services.quota_helpers import augment_with_quota, augment_list_with_quota
+from app.services.quota_helpers import augment_list_with_quota, augment_with_quota, image_response
 from app.services.resource_helpers import get_owned_resource
 from app.services.upload_service import save_uploaded_image
 from app.tasks.cbir import cbir_index_image, cbir_update_labels, cbir_index_batch_with_progress
@@ -200,7 +200,7 @@ def upload_images_batch(
     )
 
     job_id = f"idx_{uuid.uuid4().hex}"
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     job_doc = {
         "_id": job_id,
         "user_id": user_id_str,
@@ -913,33 +913,8 @@ def add_image_types(
             labels=merged_types
         )
     
-    # Fetch updated document
     updated_doc = images_col.find_one({"_id": ObjectId(image_id)})
-    
-    # Convert to response
-    response = ImageResponse(
-        _id=str(updated_doc.get("_id")),
-        user_id=updated_doc.get("user_id"),
-        filename=updated_doc.get("filename"),
-        file_path=updated_doc.get("file_path"),
-        file_size=updated_doc.get("file_size"),
-        source_type=updated_doc.get("source_type"),
-        document_id=updated_doc.get("document_id"),
-        source_image_id=updated_doc.get("source_image_id"),
-        panel_id=updated_doc.get("panel_id"),
-        panel_type=updated_doc.get("panel_type"),
-        bbox=updated_doc.get("bbox"),
-        pdf_page=updated_doc.get("pdf_page"),
-        page_bbox=updated_doc.get("page_bbox"),
-        extraction_mode=updated_doc.get("extraction_mode"),
-        original_filename=updated_doc.get("original_filename"),
-        image_type=updated_doc.get("image_type", []),
-        uploaded_date=updated_doc.get("uploaded_date"),
-        user_storage_used=updated_doc.get("user_storage_used", 0),
-        user_storage_remaining=updated_doc.get("user_storage_remaining", DEFAULT_USER_STORAGE_QUOTA)
-    )
-    
-    return response
+    return image_response(updated_doc, current_user)
 
 
 @router.delete("/{image_id}/types/{type_name}", response_model=ImageResponse, status_code=status.HTTP_200_OK)
@@ -991,40 +966,17 @@ def remove_image_type(
             labels=updated_types
         )
     
-    # Fetch updated document
     updated_doc = images_col.find_one({"_id": ObjectId(image_id)})
-    
-    # Convert to response
-    response = ImageResponse(
-        _id=str(updated_doc.get("_id")),
-        user_id=updated_doc.get("user_id"),
-        filename=updated_doc.get("filename"),
-        file_path=updated_doc.get("file_path"),
-        file_size=updated_doc.get("file_size"),
-        source_type=updated_doc.get("source_type"),
-        document_id=updated_doc.get("document_id"),
-        source_image_id=updated_doc.get("source_image_id"),
-        panel_id=updated_doc.get("panel_id"),
-        panel_type=updated_doc.get("panel_type"),
-        bbox=updated_doc.get("bbox"),
-        pdf_page=updated_doc.get("pdf_page"),
-        page_bbox=updated_doc.get("page_bbox"),
-        extraction_mode=updated_doc.get("extraction_mode"),
-        original_filename=updated_doc.get("original_filename"),
-        image_type=updated_doc.get("image_type", []),
-        uploaded_date=updated_doc.get("uploaded_date"),
-        user_storage_used=updated_doc.get("user_storage_used", 0),
-        user_storage_remaining=updated_doc.get("user_storage_remaining", DEFAULT_USER_STORAGE_QUOTA)
-    )
-    
-    return response
+    return image_response(updated_doc, current_user)
 
 
-@router.get("/types/all", status_code=status.HTTP_200_OK)
+@router.get("/types/all", status_code=status.HTTP_200_OK, deprecated=True)
 def list_all_image_types(
     current_user: dict = Depends(get_current_user)
 ):
     """
+    Deprecated: use GET /images/tags, which returns the same types as a list.
+
     Get all unique image types used in the system
     
     Returns a list of all unique image types that have been assigned to any

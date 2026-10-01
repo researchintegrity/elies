@@ -148,7 +148,9 @@ class MongoDBConnection:
         """
         database_name = get_database_name()
         try:
-            client = MongoClient(get_mongodb_url(), serverSelectionTimeoutMS=5000)
+            # tz_aware: datetimes come back as aware UTC, so the API emits them
+            # with an explicit offset (clients otherwise read them as local time)
+            client = MongoClient(get_mongodb_url(), serverSelectionTimeoutMS=5000, tz_aware=True)
             client.admin.command('ping')
         except PyMongoError as e:
             logger.error("MongoDB connection failed: %s", e)

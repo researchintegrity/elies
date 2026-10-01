@@ -36,7 +36,7 @@ def get_current_user_info(current_user: dict = Depends(get_current_active_user))
     # Ensure roles field exists for backwards compatibility
     if "roles" not in current_user:
         current_user["roles"] = ["user"]
-    return UserResponse(**current_user).dict(by_alias=True)
+    return UserResponse(**current_user).model_dump(by_alias=True)
 
 
 @router.put("/me", response_model=UserResponse)
@@ -82,7 +82,7 @@ def update_current_user(
         return_document=True
     )
     
-    return UserResponse(**result).dict(by_alias=True)
+    return UserResponse(**result).model_dump(by_alias=True)
 
 
 @router.delete("/me", response_model=MessageResponse)
@@ -155,4 +155,4 @@ def get_user_by_username(
             detail="User not found"
         )
     
-    return UserResponse(**user).dict(by_alias=True)
+    return UserResponse(**user).model_dump(by_alias=True)

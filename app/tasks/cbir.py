@@ -24,7 +24,7 @@ from app.config.settings import CELERY_MAX_RETRIES, INDEXING_BATCH_CHUNK_SIZE
 from app.schemas import IndexingJobStatus
 from app.tasks.lifecycle import TrackedJob, run_analysis
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 import logging
 
@@ -50,7 +50,7 @@ def _mark_indexed(image_ids: List[str]) -> None:
         return
     get_images_collection().update_many(
         {"_id": {"$in": _object_ids(image_ids)}},
-        {"$set": {"cbir_indexed": True, "cbir_indexed_at": datetime.utcnow()},
+        {"$set": {"cbir_indexed": True, "cbir_indexed_at": datetime.now(timezone.utc)},
          "$unset": {"cbir_error": "", "cbir_failed_at": ""}},
     )
 
@@ -64,7 +64,7 @@ def _mark_index_failure(image_ids: List[str], error: str) -> None:
         return
     get_images_collection().update_many(
         {"_id": {"$in": _object_ids(image_ids)}},
-        {"$set": {"cbir_indexed": False, "cbir_error": error, "cbir_failed_at": datetime.utcnow()}},
+        {"$set": {"cbir_indexed": False, "cbir_error": error, "cbir_failed_at": datetime.now(timezone.utc)}},
     )
 
 
@@ -130,7 +130,7 @@ def cbir_index_image(
     if success:
         get_images_collection().update_one(
             {"_id": ObjectId(image_id)},
-            {"$set": {"cbir_indexed": True, "cbir_indexed_at": datetime.utcnow(), "cbir_id": result.get("id")},
+            {"$set": {"cbir_indexed": True, "cbir_indexed_at": datetime.now(timezone.utc), "cbir_id": result.get("id")},
              "$unset": {"cbir_error": "", "cbir_failed_at": ""}},
         )
         logger.info("Image %s indexed successfully", image_id)
@@ -220,12 +220,12 @@ def cbir_index_batch_with_progress(
             "failed_images": failed,
             "progress_percent": (processed / total_images * 100) if total_images > 0 else 0,
             "current_step": current_step,
-            "updated_at": datetime.utcnow(),
+            "updated_at": datetime.now(timezone.utc),
         }
         if errors:
             update_doc["errors"] = errors
         if completed:
-            update_doc["completed_at"] = datetime.utcnow()
+            update_doc["completed_at"] = datetime.now(timezone.utc)
         # Never overwrite a terminal state written by another task instance
         jobs_col.update_one({"_id": job_id, "status": {"$nin": terminal_statuses}}, {"$set": update_doc})
 
@@ -327,7 +327,7 @@ def cbir_search(
             return False, message, None
         enriched_results = _enrich_search_results(user_id, results)
         return True, message, {
-            "timestamp": datetime.utcnow(),
+            "timestamp": datetime.now(timezone.utc),
             "query_image_id": query_image_id,
             "top_k": top_k,
             "labels_filter": labels,

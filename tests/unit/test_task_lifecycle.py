@@ -1,7 +1,7 @@
 """Task lifecycle (#68), PDF extraction idempotency (#61) and worker events over Redis (#64)."""
 import asyncio
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -234,7 +234,7 @@ def test_reaper_fails_only_stale_work(mock_db):
 
 def test_new_jobs_expire_even_if_never_completed(mock_db):
     job_id = job_logger.create_job_log("u1", JobType.TRUFOR, "t")
-    assert get_jobs_collection().find_one({"_id": job_id})["expires_at"] > datetime.utcnow()
+    assert get_jobs_collection().find_one({"_id": job_id})["expires_at"] > datetime.now(timezone.utc)
 
 
 def test_job_stats_count_partial(client, alice):

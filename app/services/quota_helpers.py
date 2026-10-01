@@ -5,7 +5,8 @@ storage_service), never computed by walking the workspace.
 """
 from typing import Any, Dict, List
 
-from app.services.storage_service import quota_fields
+from app.schemas import ImageResponse
+from app.services.storage_service import quota_fields, storage_limit
 
 
 def augment_with_quota(resource: Dict[str, Any], user_id: str, user_quota: int) -> Dict[str, Any]:
@@ -20,3 +21,10 @@ def augment_list_with_quota(resources: List[Dict[str, Any]], user_id: str, user_
     for resource in resources:
         resource.update(fields)
     return resources
+
+
+def image_response(doc: Dict[str, Any], user: Dict[str, Any]) -> ImageResponse:
+    """ImageResponse for an images document, with the user's current storage usage."""
+    data = {**doc, "_id": str(doc["_id"])}
+    data.update(quota_fields(str(user["_id"]), storage_limit(user)))
+    return ImageResponse(**data)

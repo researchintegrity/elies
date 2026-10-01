@@ -2,7 +2,7 @@
 TruFor Detection tasks for async processing
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.celery_config import celery_app
 from app.config.settings import CELERY_MAX_RETRIES
@@ -58,7 +58,7 @@ def detect_trufor(
         if not success:
             return False, message, None
         stored = {
-            "timestamp": datetime.utcnow(),
+            "timestamp": datetime.now(timezone.utc),
             "pred_map": results.get("pred_map"),
             "conf_map": results.get("conf_map"),
             "files": results.get("files"),

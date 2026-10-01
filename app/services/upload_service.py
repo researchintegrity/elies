@@ -9,7 +9,7 @@ is created, and a partially written file is removed on every failure path.
 """
 import logging
 import warnings
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import BinaryIO, Callable, Iterable, Optional
 
@@ -195,7 +195,7 @@ def save_uploaded_image(
             "extraction_mode": None,
             "original_filename": original_filename,
             "image_type": [],
-            "uploaded_date": datetime.utcnow(),
+            "uploaded_date": datetime.now(timezone.utc),
             "exif_metadata": extract_exif_metadata(str(final_path)),
         }
         get_images_collection().insert_one(image_doc)
@@ -232,7 +232,7 @@ def save_uploaded_pdf(user: dict, filename: Optional[str], stream: BinaryIO) -> 
             "extraction_status": "pending",
             "extracted_image_count": 0,
             "extraction_errors": [],
-            "uploaded_date": datetime.utcnow(),
+            "uploaded_date": datetime.now(timezone.utc),
         }
         get_documents_collection().insert_one(doc)
     except BaseException:

@@ -6,7 +6,7 @@ Supports two detection methods:
 - 'dense': Block-based dense matching
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.celery_config import celery_app
 from app.config.settings import CELERY_MAX_RETRIES
@@ -25,7 +25,7 @@ METHOD_DENSE = "dense"
 def _result_document(method: str, dense_method: int, results: dict, descriptor: str = None) -> dict:
     data = {
         "method": method,
-        "timestamp": datetime.utcnow(),
+        "timestamp": datetime.now(timezone.utc),
         "matches_image": results.get("matches_image"),
         "clusters_image": results.get("clusters_image"),
     }

@@ -5,7 +5,7 @@ Separate from dual annotations for clearer data management.
 from fastapi import APIRouter, Depends, status, Query
 from typing import List
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.schemas import SingleAnnotationCreate, SingleAnnotationResponse
 from app.db.mongodb import get_single_annotations_collection, get_images_collection
@@ -50,11 +50,11 @@ def create_single_annotation(
         "user_id": user_id_str,
         "image_id": annotation_data.image_id,
         "text": annotation_data.text,
-        "coords": annotation_data.coords.dict(exclude_none=True),
+        "coords": annotation_data.coords.model_dump(exclude_none=True),
         "type": annotation_data.type or "manipulation",
         "shape_type": annotation_data.shape_type or "rectangle",
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow()
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc)
     }
     
     result = annotations_col.insert_one(annotation_doc)

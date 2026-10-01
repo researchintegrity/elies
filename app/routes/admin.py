@@ -10,7 +10,7 @@ Provides endpoints for administrators to:
 """
 import re
 from fastapi import APIRouter, HTTPException, status, Depends, Query
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from bson import ObjectId
 import math
@@ -195,7 +195,7 @@ def update_user_quota(
         {
             "$set": {
                 "storage_limit_bytes": quota_update.storage_limit_bytes,
-                "updated_at": datetime.utcnow(),
+                "updated_at": datetime.now(timezone.utc),
             }
         },
         return_document=True
@@ -265,7 +265,7 @@ def update_user_role(
         {
             "$set": {
                 "roles": role_update.roles,
-                "updated_at": datetime.utcnow(),
+                "updated_at": datetime.now(timezone.utc),
             }
         },
         return_document=True
@@ -347,7 +347,7 @@ def reset_user_password(
                 "hashed_password": hashed_password,
                 # The user should replace an admin-chosen password (PUT /users/me/password)
                 "must_change_password": True,
-                "updated_at": datetime.utcnow(),
+                "updated_at": datetime.now(timezone.utc),
             }
         }
     )
@@ -419,7 +419,7 @@ def update_user_status(
         {
             "$set": {
                 "is_active": status_update.is_active,
-                "updated_at": datetime.utcnow(),
+                "updated_at": datetime.now(timezone.utc),
             }
         },
         return_document=True

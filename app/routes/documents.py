@@ -3,11 +3,9 @@ Document upload routes for PDF file management
 """
 import logging
 import math
-from datetime import datetime
 from pathlib import Path
 from typing import List
 
-from bson import ObjectId
 from celery.result import AsyncResult
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse
@@ -169,7 +167,7 @@ def list_documents(
     )
 
 
-@router.get("/{doc_id}")
+@router.get("/{doc_id}", response_model=DocumentResponse)
 def get_document(
     doc_id: str,
     current_user: dict = Depends(get_current_user)
@@ -198,19 +196,7 @@ def get_document(
     doc["_id"] = doc_id
     
     # Add quota information
-    doc = augment_with_quota(doc, user_id_str, user_quota)
-    
-    # Return raw dict (convert ObjectId and datetime for JSON serialization)
-    result = {}
-    for key, value in doc.items():
-        if isinstance(value, ObjectId):
-            result[key] = str(value)
-        elif isinstance(value, datetime):
-            result[key] = value.isoformat()
-        else:
-            result[key] = value
-    
-    return result
+    return DocumentResponse(**augment_with_quota(doc, user_id_str, user_quota))
 
 
 @router.get("/{doc_id}/images", response_model=List[ImageResponse])

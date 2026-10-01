@@ -14,7 +14,7 @@ from app.services.job_logger import update_job_progress, complete_job
 from app.services.storage_service import add_storage
 from app.tasks.lifecycle import TrackedJob, handle_task_exception
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timezone
 import logging
 from pathlib import Path
 
@@ -66,7 +66,7 @@ def remove_watermark_from_document(
             {"$set": {
                 "watermark_removal_status": "failed",
                 "watermark_removal_message": message,
-                "watermark_removal_completed_at": datetime.utcnow(),
+                "watermark_removal_completed_at": datetime.now(timezone.utc),
             }},
         )
 
@@ -83,7 +83,7 @@ def remove_watermark_from_document(
             {
                 "$set": {
                     "watermark_removal_status": "processing",
-                    "watermark_removal_started_at": datetime.utcnow(),
+                    "watermark_removal_started_at": datetime.now(timezone.utc),
                     "watermark_removal_retry_count": self.request.retries,
                     "watermark_removal_mode": aggressiveness_mode
                 }
@@ -138,7 +138,7 @@ def remove_watermark_from_document(
                 "extraction_status": "images not extracted - watermark removed",
                 "extracted_image_count": 0,
                 "extraction_errors": [],
-                "uploaded_date": datetime.utcnow(),
+                "uploaded_date": datetime.now(timezone.utc),
                 "is_watermark_removed": True
             }
             
@@ -150,7 +150,7 @@ def remove_watermark_from_document(
             # Update original document with watermark removal info
             update_data = {
                 "watermark_removal_status": watermark_status,
-                "watermark_removal_completed_at": datetime.utcnow(),
+                "watermark_removal_completed_at": datetime.now(timezone.utc),
                 "watermark_removal_output_file": output_filename,
                 "watermark_removal_output_path": output_file_path,
                 "watermark_removal_output_size": output_file_size,
@@ -161,7 +161,7 @@ def remove_watermark_from_document(
             watermark_status = "failed"
             update_data = {
                 "watermark_removal_status": watermark_status,
-                "watermark_removal_completed_at": datetime.utcnow(),
+                "watermark_removal_completed_at": datetime.now(timezone.utc),
                 "watermark_removal_message": status_message,
                 "watermark_removal_error": status_message
             }

@@ -15,7 +15,7 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 import redis
@@ -166,10 +166,10 @@ def create_job_log(
     Returns:
         job_id: Unique identifier for the created job
     """
-    job_id = f"job_{user_id}_{int(datetime.utcnow().timestamp())}_{uuid.uuid4().hex[:8]}"
+    job_id = f"job_{user_id}_{int(datetime.now(timezone.utc).timestamp())}_{uuid.uuid4().hex[:8]}"
     jobs_col = get_jobs_collection()
     
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     job_doc = {
         "_id": job_id,
         "user_id": user_id,
@@ -227,7 +227,7 @@ def update_job_progress(
         current_step: Optional step description
     """
     jobs_col = get_jobs_collection()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     
     update: Dict[str, Any] = {"$set": {"updated_at": now}}
     
@@ -283,7 +283,7 @@ def complete_job(
         retention_days = JOB_RETENTION_DAYS
     
     jobs_col = get_jobs_collection()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     
     update: Dict[str, Any] = {
         "$set": {

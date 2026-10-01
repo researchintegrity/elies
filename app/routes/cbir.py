@@ -5,7 +5,7 @@ Provides endpoints for image similarity search and indexing.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from bson import ObjectId
 from bson.errors import InvalidId
 
@@ -165,7 +165,7 @@ def search_similar(
         })
     except InvalidId:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Invalid image ID format"
         )
     
@@ -182,8 +182,8 @@ def search_similar(
         "user_id": user_id,
         "source_image_id": request.image_id,
         "status": AnalysisStatus.PENDING,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
         "parameters": {
             "top_k": request.top_k,
             "labels": request.labels
@@ -238,7 +238,7 @@ def search_similar_sync(
         })
     except InvalidId:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Invalid image ID format"
         )
     

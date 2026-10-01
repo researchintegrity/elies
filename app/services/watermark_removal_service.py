@@ -3,7 +3,7 @@ Watermark removal service for handling watermark removal operations
 Provides business logic for watermark removal CRUD operations
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict
 
 from app.db.mongodb import get_documents_collection
@@ -96,7 +96,7 @@ def initiate_watermark_removal(
         {
             "$set": {
                 "watermark_removal_task_id": task.id,
-                "watermark_removal_requested_at": datetime.utcnow(),
+                "watermark_removal_requested_at": datetime.now(timezone.utc),
                 "watermark_removal_status": "queued",
                 "watermark_removal_mode": aggressiveness_mode
             }

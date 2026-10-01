@@ -47,7 +47,7 @@ def _patch_everywhere(monkeypatch, original, replacement):
 
 @pytest.fixture
 def mock_db(monkeypatch):
-    client = mongomock.MongoClient()
+    client = mongomock.MongoClient(tz_aware=True)
     db = client["elies_test_unit"]
     monkeypatch.setattr(mongodb.db_connection, "_client", client)
     monkeypatch.setattr(mongodb.db_connection, "_db", db)

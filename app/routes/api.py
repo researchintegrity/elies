@@ -1,12 +1,16 @@
 """
-Frontend-specific API routes for dashboard, documents, and images
-Provides unified endpoints with pagination, filtering, and standardized responses
+Deprecated /api/* routes (issue #74).
+
+These duplicate /documents, /images, /health and /jobs with a different
+response envelope, and the frontend does not use them. They are kept for
+existing API clients, marked deprecated in the OpenAPI schema and answered
+with a ``Deprecation: true`` header; new code should use the main routes.
 """
 
 import re
 
-from fastapi import APIRouter, Query, Depends
-from datetime import datetime
+from fastapi import APIRouter, Depends, Query, Response
+from datetime import datetime, timezone
 from typing import Optional
 from app.schemas import ApiResponse, PaginatedResponse
 from app.config.storage_quota import DEFAULT_USER_STORAGE_QUOTA
@@ -16,7 +20,19 @@ from app.services.document_service import delete_document_and_artifacts
 from app.services.image_service import delete_image_and_artifacts, list_images as list_images_service
 from app.services.resource_helpers import get_owned_resource
 
-router = APIRouter(prefix="/api", tags=["api"])
+
+
+def _deprecation_headers(response: Response) -> None:
+    response.headers["Deprecation"] = "true"
+    response.headers["Link"] = '</docs>; rel="deprecation"'
+
+
+router = APIRouter(
+    prefix="/api",
+    tags=["api (deprecated)"],
+    deprecated=True,
+    dependencies=[Depends(_deprecation_headers)],
+)
 
 
 # ============================================================================
@@ -36,7 +52,7 @@ def health_check():
     return ApiResponse(
         success=True,
         message="API is healthy and operational",
-        data={"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+        data={"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
     )
 
 

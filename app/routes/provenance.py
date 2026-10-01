@@ -4,7 +4,7 @@ Provenance Analysis Routes
 Provides endpoints for triggering provenance analysis.
 """
 from fastapi import APIRouter, Depends, HTTPException, status
-from datetime import datetime
+from datetime import datetime, timezone
 from bson import ObjectId
 
 from typing import List, Literal, Optional
@@ -91,8 +91,8 @@ def analyze_provenance(
         "user_id": user_id,
         "source_image_id": request.image_id,
         "status": AnalysisStatus.PENDING,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
         "parameters": {
             "k": request.k,
             "q": request.q,

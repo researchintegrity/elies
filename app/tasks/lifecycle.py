@@ -10,7 +10,7 @@ Shared lifecycle handling for Celery tasks (issue #68).
 """
 import logging
 from contextlib import nullcontext
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -69,7 +69,7 @@ class TrackedJob:
 
     def _update_analysis(self, fields: Dict[str, Any]) -> None:
         if self.analysis_id:
-            fields["updated_at"] = datetime.utcnow()
+            fields["updated_at"] = datetime.now(timezone.utc)
             get_analyses_collection().update_one({"_id": ObjectId(self.analysis_id)}, {"$set": fields})
 
     def start(self, message: str) -> None:

@@ -4,7 +4,7 @@ Panel extraction tasks for async processing
 import os
 import logging
 from typing import Dict, List, Any
-from datetime import datetime
+from datetime import datetime, timezone
 from bson import ObjectId
 from app.celery_config import celery_app
 from app.db.mongodb import get_images_collection
@@ -366,8 +366,8 @@ def _create_panel_document(
         "panel_type": panel_type,
         "bbox": bbox,
         "image_type": [panel_type] if panel_type else [],  # Initialize with panel_type
-        "uploaded_date": datetime.utcnow(),
-        "created_at": datetime.utcnow(),
+        "uploaded_date": datetime.now(timezone.utc),
+        "created_at": datetime.now(timezone.utc),
         "exif_metadata": exif_metadata
     }
     

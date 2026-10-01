@@ -5,7 +5,7 @@ Separate from single annotations for clearer data management.
 from fastapi import APIRouter, Depends, status, Query, HTTPException
 from typing import List, Optional
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.schemas import (
     DualAnnotationCreate, 
@@ -62,13 +62,13 @@ def create_dual_annotation(
         "source_image_id": annotation_data.source_image_id,
         "target_image_id": annotation_data.target_image_id,
         "link_id": annotation_data.link_id,
-        "coords": annotation_data.coords.dict(exclude_none=True),
+        "coords": annotation_data.coords.model_dump(exclude_none=True),
         "pair_name": annotation_data.pair_name,
         "pair_color": annotation_data.pair_color,
         "text": annotation_data.text,
         "shape_type": annotation_data.shape_type or "rectangle",
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow()
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc)
     }
     
     result = annotations_col.insert_one(annotation_doc)
@@ -130,13 +130,13 @@ def create_dual_annotations_batch(
             "source_image_id": ann_data.source_image_id,
             "target_image_id": ann_data.target_image_id,
             "link_id": ann_data.link_id,
-            "coords": ann_data.coords.dict(exclude_none=True),
+            "coords": ann_data.coords.model_dump(exclude_none=True),
             "pair_name": ann_data.pair_name,
             "pair_color": ann_data.pair_color,
             "text": ann_data.text,
             "shape_type": ann_data.shape_type or "rectangle",
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow()
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc)
         }
         
         result = annotations_col.insert_one(annotation_doc)
@@ -313,7 +313,7 @@ def update_dual_annotation(
     # Build update document with only provided fields
     update_fields = {}
     if update_data.coords is not None:
-        update_fields["coords"] = update_data.coords.dict(exclude_none=True)
+        update_fields["coords"] = update_data.coords.model_dump(exclude_none=True)
     if update_data.pair_name is not None:
         update_fields["pair_name"] = update_data.pair_name
     if update_data.pair_color is not None:
@@ -326,7 +326,7 @@ def update_dual_annotation(
         existing["_id"] = str(existing["_id"])
         return DualAnnotationResponse(**existing)
     
-    update_fields["updated_at"] = datetime.utcnow()
+    update_fields["updated_at"] = datetime.now(timezone.utc)
     
     annotations_col = get_dual_annotations_collection()
     annotations_col.update_one(
@@ -391,7 +391,7 @@ def update_dual_annotations_by_link(
     if not update_fields:
         return {"updated_count": 0, "message": "No fields to update"}
     
-    update_fields["updated_at"] = datetime.utcnow()
+    update_fields["updated_at"] = datetime.now(timezone.utc)
     
     result = annotations_col.update_many(
         {"link_id": link_id, "user_id": user_id_str},
