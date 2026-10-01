@@ -5,10 +5,11 @@ import logging
 from typing import Dict, List, Any, Optional
 from bson import ObjectId
 from app.db.mongodb import get_images_collection
-from app.exceptions import ExternalServiceError, ResourceNotFoundError, ValidationError
+from app.exceptions import ResourceNotFoundError, ValidationError
 from app.services.resource_helpers import get_owned_resource
-from app.schemas import JobStatus, JobType
-from app.services.job_logger import attach_celery_task, complete_job, create_job_log, find_job_by_celery_task
+from app.schemas import JobType
+from app.services.job_logger import create_job_log, ensure_job_capacity, find_job_by_celery_task
+from app.services.task_submission import submit_task
 from app.tasks.panel_extraction import extract_panels_from_images
 logger = logging.getLogger(__name__)
 
@@ -34,6 +35,8 @@ def initiate_panel_extraction(
     Raises:
         ValidationError / ResourceNotFoundError: If validation fails
     """
+    ensure_job_capacity(user_id)
+
     image_paths = []
     validated_ids = []
     for img_id in dict.fromkeys(image_ids):  # de-duplicate, keep order
@@ -60,20 +63,12 @@ def initiate_panel_extraction(
         input_data={"image_ids": validated_ids, "image_count": len(validated_ids)}
     )
 
-    # Queue Celery task
-    try:
-        task = extract_panels_from_images.delay(
-            image_ids=validated_ids,
-            user_id=user_id,
-            image_paths=image_paths,
-            job_id=job_id
-        )
-    except Exception as e:
-        logger.error(f"Error queuing panel extraction task: {e}", exc_info=True)
-        complete_job(job_id, user_id, JobStatus.FAILED, errors=["Task queue unavailable"])
-        raise ExternalServiceError("task queue", "panel extraction could not be started")
-
-    attach_celery_task(job_id, task.id)
+    task = submit_task(extract_panels_from_images, dict(
+        image_ids=validated_ids,
+        user_id=user_id,
+        image_paths=image_paths,
+        job_id=job_id
+    ), owner_id=user_id, job_id=job_id)
     logger.info(f"Panel extraction task queued: {task.id} for user {user_id}")
     return {
         "task_id": task.id,
@@ -121,6 +116,10 @@ def get_panel_extraction_status(
             "message": task_info.get("message"),
             "error": task_info.get("error") or (str(task_result.info) if task_result.failed() else None)
         }
+
+        # The task returns a failure summary (state SUCCESS) when extraction fails
+        if response["status"] == "completed" and task_info.get("status") == "failed":
+            response["status"] = "failed"
 
         # If task is completed, retrieve and include extracted panel documents
         if response["status"] == "completed":

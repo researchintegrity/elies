@@ -17,7 +17,8 @@ from app.schemas import (
     AnalysisStatus,
     JobType,
 )
-from app.services.job_logger import attach_celery_task, create_job_log
+from app.services.job_logger import create_job_log, ensure_job_capacity
+from app.services.task_submission import submit_task
 from app.utils.docker_provenance import check_provenance_health
 from app.tasks.provenance import provenance_analysis_task
 from pydantic import BaseModel, Field
@@ -68,7 +69,8 @@ def analyze_provenance(
     3. Builds a graph of shared content
     """
     user_id = str(current_user["_id"])
-    
+    ensure_job_capacity(user_id)
+
     # Verify query image
     images_col = get_images_collection()
     query_image = images_col.find_one({
@@ -122,7 +124,7 @@ def analyze_provenance(
     )
     
     # Trigger async task
-    task = provenance_analysis_task.delay(
+    task = submit_task(provenance_analysis_task, dict(
         analysis_id=analysis_id,
         user_id=user_id,
         query_image_id=request.image_id,
@@ -132,9 +134,8 @@ def analyze_provenance(
         max_depth=request.max_depth,
         descriptor_type=request.descriptor_type,
         job_id=job_id
-    )
+    ), owner_id=user_id, job_id=job_id, analysis_id=analysis_id)
     
-    attach_celery_task(job_id, task.id)
 
     return {
         "message": "Provenance analysis started",

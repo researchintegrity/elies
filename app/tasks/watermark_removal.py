@@ -2,13 +2,13 @@
 Watermark removal tasks for async processing
 """
 from celery import current_task
-from celery.exceptions import SoftTimeLimitExceeded
 from app.celery_config import celery_app
 from app.db.mongodb import get_documents_collection, get_images_collection
 from app.utils.docker_watermark import remove_watermark_with_docker
-from app.config.settings import CELERY_MAX_RETRIES, CELERY_RETRY_BACKOFF_BASE, convert_host_path_to_container
+from app.config.settings import CELERY_MAX_RETRIES, convert_host_path_to_container
 from app.schemas import JobType, JobStatus
-from app.services.job_logger import create_job_log, update_job_progress, complete_job
+from app.services.job_logger import update_job_progress, complete_job
+from app.tasks.lifecycle import TrackedJob, handle_task_exception
 from bson import ObjectId
 from datetime import datetime
 import logging
@@ -50,17 +50,23 @@ def remove_watermark_from_document(
         Retries automatically with exponential backoff on failure
     """
     documents_col = get_documents_collection()
-    
+    job = TrackedJob.ensure(
+        self, user_id, job_id, JobType.WATERMARK_REMOVAL, f"Watermark Removal (mode {aggressiveness_mode})",
+        {"doc_id": doc_id, "mode": aggressiveness_mode},
+    )
+    job_id = job.job_id
+
+    def mark_document_failed(message: str) -> None:
+        documents_col.update_one(
+            {"_id": ObjectId(doc_id)},
+            {"$set": {
+                "watermark_removal_status": "failed",
+                "watermark_removal_message": message,
+                "watermark_removal_completed_at": datetime.utcnow(),
+            }},
+        )
+
     try:
-        # Use provided job_id or create one if not provided (backward compatibility)
-        if not job_id:
-            job_id = create_job_log(
-                user_id=user_id,
-                job_type=JobType.WATERMARK_REMOVAL,
-                title=f"Watermark Removal (mode {aggressiveness_mode})",
-                celery_task_id=self.request.id,
-                input_data={"doc_id": doc_id, "mode": aggressiveness_mode}
-            )
         
         logger.info(
             f"Starting watermark removal for doc_id={doc_id}, mode={aggressiveness_mode}"
@@ -174,43 +180,5 @@ def remove_watermark_from_document(
             "cleaned_document_id": update_data.get("cleaned_document_id") if success else None
         }
     
-    except SoftTimeLimitExceeded:
-        error_msg = f"Watermark removal task timed out for doc_id={doc_id}"
-        logger.error(error_msg)
-        
-        documents_col.update_one(
-            {"_id": ObjectId(doc_id)},
-            {
-                "$set": {
-                    "watermark_removal_status": "failed",
-                    "watermark_removal_message": error_msg,
-                    "watermark_removal_completed_at": datetime.utcnow()
-                }
-            }
-        )
-        if job_id:
-            complete_job(job_id, user_id, JobStatus.FAILED, errors=[error_msg])
-        
-        raise
-    
-    except Exception as e:
-        error_msg = f"Unexpected error during watermark removal for doc_id={doc_id}: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-        
-        # Update document with error status
-        documents_col.update_one(
-            {"_id": ObjectId(doc_id)},
-            {
-                "$set": {
-                    "watermark_removal_status": "failed",
-                    "watermark_removal_message": error_msg,
-                    "watermark_removal_completed_at": datetime.utcnow()
-                }
-            }
-        )
-        if job_id:
-            complete_job(job_id, user_id, JobStatus.FAILED, errors=[error_msg])
-        
-        # Retry with exponential backoff
-        retry_delay = CELERY_RETRY_BACKOFF_BASE ** self.request.retries
-        raise self.retry(exc=e, countdown=retry_delay)
+    except BaseException as exc:  # noqa: BLE001 - re-raised by handle_task_exception
+        handle_task_exception(self, exc, job, on_final_failure=mark_document_failed)

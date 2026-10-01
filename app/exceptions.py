@@ -223,3 +223,8 @@ class TransientError(ELIESException):
 
 class DockerUnavailableError(TransientError):
     """The Docker daemon could not be reached to run an analysis tool."""
+
+
+class TooManyJobsError(ELIESException):
+    """The user already has the maximum number of active jobs (HTTP 429)."""
+    status_code = 429

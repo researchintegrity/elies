@@ -21,6 +21,7 @@ EXPECTED_TASKS = {
     "tasks.extract_images",
     "tasks.extract_panels",
     "tasks.provenance_analysis",
+    "tasks.reap_stale_jobs",
     "tasks.remove_watermark",
 }
 

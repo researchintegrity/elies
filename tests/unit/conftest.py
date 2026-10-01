@@ -77,6 +77,22 @@ def stub_external_services(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def fake_redis(monkeypatch):
+    """In-memory Redis shared by the sync publisher and async SSE subscribers."""
+    import fakeredis
+    import fakeredis.aioredis
+
+    from app.routes import jobs as jobs_routes
+    from app.services import job_logger
+
+    server = fakeredis.FakeServer()
+    monkeypatch.setattr(job_logger, "_redis_client", fakeredis.FakeRedis(server=server))
+    monkeypatch.setattr(job_logger, "_redis_unavailable_until", 0.0)
+    monkeypatch.setattr(jobs_routes, "_async_redis_client", lambda: fakeredis.aioredis.FakeRedis(server=server))
+    return server
+
+
+@pytest.fixture(autouse=True)
 def reset_rate_limits():
     """Rate limiters are process-global; start every test with a clean slate."""
     from app.routes import auth

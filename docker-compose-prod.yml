@@ -109,6 +109,26 @@ services:
       - elies_network
       - milvus # Connect to CBIR/Milvus network for inter-service communication
 
+  # Celery beat: periodic maintenance (fails jobs abandoned by a dead worker)
+  beat:
+    build: .
+    env_file: .env
+    environment:
+      MONGODB_URL: ${MONGODB_URL:-mongodb://mongo:27017}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      CONTAINER_WORKSPACE_PATH: ${CONTAINER_WORKSPACE_PATH}
+      HOST_WORKSPACE_PATH: ${HOST_WORKSPACE_PATH}
+    depends_on:
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command: celery -A app.celery_config beat -l info --schedule /tmp/celerybeat-schedule
+    restart: unless-stopped
+    networks:
+      - elies_network
+
   # Provenance Analysis Service
   provenance-service:
     container_name: provenance-service

@@ -5,20 +5,19 @@ import os
 import logging
 from typing import Dict, List, Any
 from datetime import datetime
-from celery.exceptions import SoftTimeLimitExceeded
 from bson import ObjectId
 from app.celery_config import celery_app
 from app.db.mongodb import get_images_collection
 from app.utils.docker_panel_extractor import extract_panels_with_docker
 from app.config.settings import (
-    CELERY_MAX_RETRIES, 
-    CELERY_RETRY_BACKOFF_BASE,
+    CELERY_MAX_RETRIES,
     convert_container_path_to_host,
     convert_host_path_to_container
 )
 from app.schemas import JobType, JobStatus
-from app.services.job_logger import create_job_log, update_job_progress, complete_job
+from app.services.job_logger import update_job_progress, complete_job
 from app.tasks.cbir import cbir_index_batch
+from app.tasks.lifecycle import TrackedJob, handle_task_exception
 
 logger = logging.getLogger(__name__)
 
@@ -58,18 +57,17 @@ def extract_panels_from_images(
     """
     images_col = get_images_collection()
     task_id = self.request.id
+    job = TrackedJob.ensure(
+        self, user_id, job_id, JobType.PANEL_EXTRACTION, f"Panel Extraction ({len(image_ids)} images)",
+        {"image_ids": image_ids},
+    )
+    job_id = job.job_id
+
+    def fail(error_msg: str) -> Dict[str, Any]:
+        job.fail(error_msg)
+        return _handle_panel_extraction_failure(task_id, image_ids, user_id, error_msg)
 
     try:
-        # Use provided job_id or create one if not provided (backward compatibility)
-        if not job_id:
-            job_id = create_job_log(
-                user_id=user_id,
-                job_type=JobType.PANEL_EXTRACTION,
-                title=f"Panel Extraction ({len(image_ids)} images)",
-                celery_task_id=task_id,
-                input_data={"image_ids": image_ids}
-            )
-        
         update_job_progress(job_id, user_id, JobStatus.PROCESSING, 10, "Validating images...")
         logger.info(
             f"Starting panel extraction for user_id={user_id}, "
@@ -83,24 +81,18 @@ def extract_panels_from_images(
                 if not image_doc:
                     error_msg = f"Image not found or does not belong to user: {img_id}"
                     logger.error(error_msg)
-                    return _handle_panel_extraction_failure(
-                        task_id, image_ids, user_id, error_msg
-                    )
+                    return fail(error_msg)
             except Exception as e:
                 error_msg = f"Error validating image {img_id}: {str(e)}"
                 logger.error(error_msg)
-                return _handle_panel_extraction_failure(
-                    task_id, image_ids, user_id, error_msg
-                )
+                return fail(error_msg)
 
         # Validate image files exist
         for img_path in image_paths:
             if not os.path.exists(img_path):
                 error_msg = f"Image file not found: {img_path}"
                 logger.error(error_msg)
-                return _handle_panel_extraction_failure(
-                    task_id, image_ids, user_id, error_msg
-                )
+                return fail(error_msg)
 
         update_job_progress(job_id, user_id, None, 30, "Running Docker panel extraction...")
         
@@ -113,10 +105,7 @@ def extract_panels_from_images(
 
         if not success:
             logger.error(f"Panel extraction failed: {status_message}")
-            complete_job(job_id, user_id, JobStatus.FAILED, errors=[status_message])
-            return _handle_panel_extraction_failure(
-                task_id, image_ids, user_id, status_message
-            )
+            return fail(status_message)
 
         # Parse PANELS.csv and create MongoDB documents
         panels_data = output_info.get("panels_data", [])
@@ -228,9 +217,7 @@ def extract_panels_from_images(
         if not result_panel_ids:
             error_msg = "No panel documents were successfully created"
             logger.error(error_msg)
-            return _handle_panel_extraction_failure(
-                task_id, image_ids, user_id, error_msg
-            )
+            return fail(error_msg)
 
         # Clean up PANELS.csv after processing
         panels_csv_path = output_info.get("panels_csv_path")
@@ -285,26 +272,8 @@ def extract_panels_from_images(
         logger.info(f"Panel extraction completed: {result['message']}")
         return result
 
-    except SoftTimeLimitExceeded:
-        error_msg = f"Panel extraction task timed out for user_id={user_id}"
-        logger.error(error_msg)
-        if job_id:
-            complete_job(job_id, user_id, JobStatus.FAILED, errors=[error_msg])
-        return _handle_panel_extraction_failure(task_id, image_ids, user_id, error_msg)
-
-    except Exception as e:
-        error_msg = f"Unexpected error during panel extraction for user_id={user_id}: {str(e)}"
-        logger.error(error_msg, exc_info=True)
-
-        # Retry with exponential backoff
-        retry_delay = CELERY_RETRY_BACKOFF_BASE ** self.request.retries
-        try:
-            raise self.retry(exc=e, countdown=retry_delay)
-        except self.MaxRetriesExceededError:
-            logger.error(f"Max retries exceeded for panel extraction task {task_id}")
-            if job_id:
-                complete_job(job_id, user_id, JobStatus.FAILED, errors=[error_msg])
-            return _handle_panel_extraction_failure(task_id, image_ids, user_id, error_msg)
+    except BaseException as exc:  # noqa: BLE001 - re-raised by handle_task_exception
+        handle_task_exception(self, exc, job)
 
 
 def _create_panel_document(

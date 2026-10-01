@@ -15,7 +15,8 @@ from app.schemas import (
 )
 from app.services.deletion_service import delete_analyses
 from app.services.resource_helpers import get_owned_resource
-from app.services.job_logger import attach_celery_task, create_job_log
+from app.services.job_logger import create_job_log, ensure_job_capacity
+from app.services.task_submission import submit_task
 from app.config.settings import convert_container_path_to_host, is_container_path
 from datetime import datetime
 from bson import ObjectId
@@ -396,6 +397,7 @@ def analyze_copy_move_single(
     - 'dense': Block-based dense matching
     """
     user_id_str = str(current_user["_id"])
+    ensure_job_capacity(user_id_str)
     
     # Verify ownership
     image = get_owned_resource(
@@ -444,7 +446,7 @@ def analyze_copy_move_single(
     )
     
     # Trigger task with analysis_id and job_id
-    task = detect_copy_move.delay(
+    task = submit_task(detect_copy_move, dict(
         analysis_id=analysis_id,
         image_id=request.image_id,
         user_id=user_id_str,
@@ -452,9 +454,8 @@ def analyze_copy_move_single(
         method=request.method.value,
         dense_method=request.dense_method,
         job_id=job_id
-    )
+    ), owner_id=user_id_str, job_id=job_id, analysis_id=analysis_id)
     
-    attach_celery_task(job_id, task.id)
 
     return {
         "message": "Single-image copy-move analysis started",
@@ -478,6 +479,7 @@ def analyze_copy_move_cross(
     - 'dense': Block-based dense matching (methods 1-5)
     """
     user_id_str = str(current_user["_id"])
+    ensure_job_capacity(user_id_str)
     
     # Verify ownership of both images
     source_image = get_owned_resource(
@@ -542,7 +544,7 @@ def analyze_copy_move_cross(
     
     from app.tasks.copy_move_detection import detect_copy_move_cross
     
-    task = detect_copy_move_cross.delay(
+    task = submit_task(detect_copy_move_cross, dict(
         analysis_id=analysis_id,
         source_image_id=request.source_image_id,
         target_image_id=request.target_image_id,
@@ -553,9 +555,8 @@ def analyze_copy_move_cross(
         dense_method=request.dense_method,
         descriptor=request.descriptor.value,
         job_id=job_id
-    )
+    ), owner_id=user_id_str, job_id=job_id, analysis_id=analysis_id)
     
-    attach_celery_task(job_id, task.id)
 
     return {
         "message": "Cross-image copy-move analysis started",
@@ -575,6 +576,7 @@ def analyze_trufor(
         request.save_noiseprint: Whether to save the noiseprint map (default: False)
     """
     user_id_str = str(current_user["_id"])
+    ensure_job_capacity(user_id_str)
     
     # Verify ownership
     image = get_owned_resource(
@@ -620,16 +622,15 @@ def analyze_trufor(
     
     # Trigger task
     from app.tasks.trufor import detect_trufor
-    task = detect_trufor.delay(
+    task = submit_task(detect_trufor, dict(
         analysis_id=analysis_id,
         image_id=request.image_id,
         user_id=user_id_str,
         image_path=image["file_path"],
         save_noiseprint=request.save_noiseprint,
         job_id=job_id
-    )
+    ), owner_id=user_id_str, job_id=job_id, analysis_id=analysis_id)
     
-    attach_celery_task(job_id, task.id)
 
     return {"message": "TruFor analysis started", "analysis_id": analysis_id}
 

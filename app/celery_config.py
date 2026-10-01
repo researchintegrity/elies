@@ -62,6 +62,11 @@ celery_app.conf.update(
     # Worker settings
     worker_prefetch_multiplier=1,
     worker_max_tasks_per_child=1000,
+
+    # Periodic maintenance, run by the 'beat' service in docker compose
+    beat_schedule={
+        "reap-stale-jobs": {"task": "tasks.reap_stale_jobs", "schedule": 600.0},
+    },
 )
 
 

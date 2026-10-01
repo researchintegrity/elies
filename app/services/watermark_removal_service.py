@@ -10,7 +10,8 @@ from app.db.mongodb import get_documents_collection
 from app.exceptions import ValidationError
 from app.services.resource_helpers import get_owned_resource
 from app.schemas import JobType
-from app.services.job_logger import attach_celery_task, create_job_log
+from app.services.job_logger import create_job_log, ensure_job_capacity
+from app.services.task_submission import submit_task
 from app.tasks.watermark_removal import remove_watermark_from_document
 from app.config.settings import convert_host_path_to_container
 import logging
@@ -57,6 +58,7 @@ def initiate_watermark_removal(
 
     doc = get_owned_resource(get_documents_collection, document_id, user_id, "Document")
     doc_oid = doc["_id"]
+    ensure_job_capacity(user_id)
 
     # Check if document is a PDF
     if not doc.get("file_path", "").lower().endswith(".pdf"):
@@ -80,15 +82,14 @@ def initiate_watermark_removal(
     )
     
     # Queue async watermark removal task
-    task = remove_watermark_from_document.delay(
+    task = submit_task(remove_watermark_from_document, dict(
         doc_id=document_id,
         user_id=user_id,
         pdf_path=pdf_path,
         aggressiveness_mode=aggressiveness_mode,
         job_id=job_id
-    )
+    ), owner_id=user_id, job_id=job_id)
     
-    attach_celery_task(job_id, task.id)
 
     # Update document with task information
     documents_col.update_one(

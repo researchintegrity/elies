@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from app.celery_config import celery_app
 from app.config.storage_quota import DEFAULT_USER_STORAGE_QUOTA
 from app.db.mongodb import get_documents_collection, get_images_collection
-from app.exceptions import ResourceNotFoundError
+from app.exceptions import ResourceNotFoundError, TransientError
 from app.schemas import (
     DocumentResponse,
     ImageResponse,
@@ -27,7 +27,8 @@ from app.schemas import (
     JobType,
 )
 from app.services.document_service import delete_document_and_artifacts
-from app.services.job_logger import attach_celery_task, complete_job, create_job_log, find_job_by_celery_task
+from app.services.job_logger import create_job_log, ensure_job_capacity, find_job_by_celery_task
+from app.services.task_submission import submit_task
 from app.services.quota_helpers import augment_with_quota
 from app.services.resource_helpers import get_owned_resource
 from app.services.upload_service import save_uploaded_pdf
@@ -78,6 +79,7 @@ def upload_document(
 
     user_id_str = str(current_user["_id"])
     user_quota = current_user.get("storage_limit_bytes", DEFAULT_USER_STORAGE_QUOTA)
+    ensure_job_capacity(user_id_str)
 
     doc_record = save_uploaded_pdf(current_user, file.filename, file.file)
     doc_oid = doc_record["_id"]
@@ -96,25 +98,19 @@ def upload_document(
 
     documents_col = get_documents_collection()
     try:
-        task = extract_images_from_document.delay(
+        task = submit_task(extract_images_from_document, dict(
             doc_id=doc_id,
             user_id=user_id_str,
             pdf_path=doc_record["file_path"],
             job_id=job_id
-        )
-    except Exception as e:
-        logger.error(f"Failed to queue image extraction for document {doc_id}: {e}")
+        ), owner_id=user_id_str, job_id=job_id)
+    except TransientError:
         documents_col.update_one(
             {"_id": doc_oid},
             {"$set": {"extraction_status": "failed", "extraction_errors": ["Task queue unavailable"]}}
         )
-        complete_job(job_id, user_id_str, JobStatus.FAILED, errors=["Task queue unavailable"])
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Document saved, but image extraction could not be started. Please try again later."
-        )
+        raise
 
-    attach_celery_task(job_id, task.id)
     documents_col.update_one({"_id": doc_oid}, {"$set": {"task_id": task.id}})
     doc_record["task_id"] = task.id
     doc_record["_id"] = doc_id

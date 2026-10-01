@@ -93,6 +93,8 @@ def _redis_url(db: int) -> str:
 
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL") or _redis_url(REDIS_DB)
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND") or _redis_url(REDIS_DB + 1)
+# Redis used to publish job events to the API's SSE streams
+JOB_EVENTS_REDIS_URL = os.getenv("JOB_EVENTS_REDIS_URL") or _redis_url(REDIS_DB)
 
 
 # ============================================================================
@@ -208,6 +210,11 @@ CELERY_RESULT_EXPIRES = 3600  # 1 hour
 
 # Job monitoring settings
 JOB_RETENTION_DAYS = _env_int("JOB_RETENTION_DAYS", 7)  # Days to retain job logs
+# Most analysis jobs (tool runs, extractions) a user may have pending or running
+MAX_ACTIVE_JOBS_PER_USER = _env_int("MAX_ACTIVE_JOBS_PER_USER", 20)
+# Jobs not updated for this long are considered abandoned by a dead worker
+STALE_PROCESSING_MINUTES = _env_int("STALE_PROCESSING_MINUTES", 60)
+STALE_PENDING_HOURS = _env_int("STALE_PENDING_HOURS", 24)
 
 # Redis connection timeouts
 CELERY_REDIS_SOCKET_CONNECT_TIMEOUT = 5

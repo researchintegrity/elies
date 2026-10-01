@@ -1074,6 +1074,7 @@ class JobStatsResponse(BaseModel):
     processing: int = Field(0, description="Jobs currently running")
     completed: int = Field(0, description="Successfully completed jobs")
     failed: int = Field(0, description="Failed jobs")
+    partial: int = 0
     by_type: Dict[str, int] = Field(default_factory=dict, description="Job counts by type")
 
 

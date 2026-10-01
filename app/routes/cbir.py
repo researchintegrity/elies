@@ -31,6 +31,7 @@ from app.tasks.cbir import (
     cbir_delete_image,
     cbir_delete_user_data,
 )
+from app.services.task_submission import submit_task
 from app.services.cbir_service import (
     get_user_images_for_indexing,
     search_similar_by_image_id,
@@ -196,14 +197,14 @@ def search_similar(
     )
     
     # Trigger async search
-    cbir_search.delay(
+    submit_task(cbir_search, dict(
         analysis_id=analysis_id,
         user_id=user_id,
         query_image_id=request.image_id,
         query_image_path=query_image["file_path"],
         top_k=request.top_k,
         labels=request.labels
-    )
+    ), owner_id=user_id, analysis_id=analysis_id)
     
     return {
         "message": "CBIR search started",

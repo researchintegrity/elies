@@ -6,7 +6,6 @@ These tasks handle background indexing and searching operations.
 from app.celery_config import celery_app
 from app.db.mongodb import (
     get_images_collection,
-    get_analyses_collection,
     get_indexing_jobs_collection,
 )
 from app.schemas import JobStatus
@@ -22,7 +21,8 @@ from app.utils.docker_cbir import (
     update_image_labels,
 )
 from app.config.settings import CELERY_MAX_RETRIES, INDEXING_BATCH_CHUNK_SIZE
-from app.schemas import AnalysisStatus, IndexingJobStatus
+from app.schemas import IndexingJobStatus
+from app.tasks.lifecycle import TrackedJob, run_analysis
 from bson import ObjectId
 from datetime import datetime
 from typing import List, Optional, Tuple
@@ -314,81 +314,28 @@ def cbir_search(
         top_k: Number of results
         labels: Optional filter labels
     """
-    analyses_col = get_analyses_collection()
-    
-    try:
-        # Update status to processing
-        analyses_col.update_one(
-            {"_id": ObjectId(analysis_id)},
-            {
-                "$set": {
-                    "status": AnalysisStatus.PROCESSING,
-                    "status_message": "Searching for similar images...",
-                    "updated_at": datetime.utcnow()
-                }
-            }
-        )
-        
-        logger.info(f"Searching similar images for analysis {analysis_id}")
-        
+    job = TrackedJob(user_id, None, analysis_id)
+
+    def work():
         success, message, results = search_similar_images(
             user_id=user_id,
             image_path=query_image_path,
             top_k=top_k,
             labels=labels
         )
-        
-        if success:
-            # Enrich results with image IDs from our database
-            enriched_results = _enrich_search_results(user_id, results)
-            
-            analyses_col.update_one(
-                {"_id": ObjectId(analysis_id)},
-                {
-                    "$set": {
-                        "status": AnalysisStatus.COMPLETED,
-                        "status_message": "Completed",
-                        "results": {
-                            "timestamp": datetime.utcnow(),
-                            "query_image_id": query_image_id,
-                            "top_k": top_k,
-                            "labels_filter": labels,
-                            "matches_count": len(enriched_results),
-                            "matches": enriched_results
-                        },
-                        "updated_at": datetime.utcnow()
-                    }
-                }
-            )
-            logger.info(f"CBIR search completed for analysis {analysis_id}, found {len(enriched_results)} matches")
-            return {"status": "completed", "matches_count": len(enriched_results)}
-        else:
-            analyses_col.update_one(
-                {"_id": ObjectId(analysis_id)},
-                {
-                    "$set": {
-                        "status": AnalysisStatus.FAILED,
-                        "error": message,
-                        "updated_at": datetime.utcnow()
-                    }
-                }
-            )
-            logger.error(f"CBIR search failed for analysis {analysis_id}: {message}")
-            return {"status": "failed", "error": message}
-            
-    except Exception as e:
-        logger.error(f"Error in CBIR search for analysis {analysis_id}: {e}")
-        analyses_col.update_one(
-            {"_id": ObjectId(analysis_id)},
-            {
-                "$set": {
-                    "status": AnalysisStatus.FAILED,
-                    "error": str(e),
-                    "updated_at": datetime.utcnow()
-                }
-            }
-        )
-        raise self.retry(exc=e, countdown=60)
+        if not success:
+            return False, message, None
+        enriched_results = _enrich_search_results(user_id, results)
+        return True, message, {
+            "timestamp": datetime.utcnow(),
+            "query_image_id": query_image_id,
+            "top_k": top_k,
+            "labels_filter": labels,
+            "matches_count": len(enriched_results),
+            "matches": enriched_results
+        }
+
+    return run_analysis(self, job, "Searching for similar images...", work)
 
 
 @celery_app.task(bind=True, max_retries=CELERY_MAX_RETRIES, name="tasks.cbir_delete_image")
