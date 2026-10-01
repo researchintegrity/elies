@@ -26,7 +26,7 @@ import shutil
 from app.config.settings import UPLOAD_DIR
 from app.config.storage_quota import MAX_IMAGE_FILE_SIZE, MAX_PDF_FILE_SIZE
 
-# Needs a running MongoDB (and for some tests Redis/CBIR): run with -m integration
+# Needs a running MongoDB; classes marked e2e also need the API server
 pytestmark = pytest.mark.integration
 
 # Configuration
@@ -323,6 +323,7 @@ def create_test_image(filename: str = "test.png", format_type: str = "png") -> t
 # TESTS: DOCUMENT UPLOAD
 # ============================================================================
 
+@pytest.mark.e2e  # calls the running API server at API_URL
 class TestDocumentUpload:
     """Test PDF document upload functionality"""
     
@@ -585,6 +586,7 @@ class TestDocumentRetrieval:
 # TESTS: IMAGE UPLOAD
 # ============================================================================
 
+@pytest.mark.e2e  # calls the running API server at API_URL
 class TestImageUpload:
     """Test image file upload functionality"""
     
@@ -687,6 +689,7 @@ class TestImageUpload:
 # TESTS: IMAGE LIST AND GET
 # ============================================================================
 
+@pytest.mark.e2e  # calls the running API server at API_URL
 class TestImageRetrieval:
     """Test image retrieval functionality"""
     
@@ -771,6 +774,7 @@ class TestImageRetrieval:
 # TESTS: DOWNLOAD OPERATIONS
 # ============================================================================
 
+@pytest.mark.e2e  # calls the running API server at API_URL
 class TestDownload:
     """Test file download functionality"""
     
@@ -837,6 +841,7 @@ class TestDownload:
 # TESTS: DELETE OPERATIONS
 # ============================================================================
 
+@pytest.mark.e2e  # calls the running API server at API_URL
 class TestDelete:
     """Test file deletion functionality"""
     
@@ -962,6 +967,7 @@ class TestDelete:
 # TESTS: DOCUMENT IMAGES ASSOCIATION
 # ============================================================================
 
+@pytest.mark.e2e  # calls the running API server at API_URL
 class TestDocumentImageAssociation:
     """Test association between documents and images"""
     
@@ -995,6 +1001,7 @@ class TestDocumentImageAssociation:
 # TESTS: EDGE CASES AND ERROR HANDLING
 # ============================================================================
 
+@pytest.mark.e2e  # calls the running API server at API_URL
 class TestEdgeCases:
     """Test edge cases and error handling"""
     
@@ -1076,6 +1083,7 @@ class TestEdgeCases:
 # TESTS: DATABASE INTEGRITY
 # ============================================================================
 
+@pytest.mark.e2e  # calls the running API server at API_URL
 class TestDatabaseIntegrity:
     """Test database records and integrity"""
     
@@ -1407,7 +1415,7 @@ class TestCBIRHealthCheck:
         mock_response.json.return_value = {"model": True, "database": True}
         
         with patch('app.utils.docker_cbir.requests.get', return_value=mock_response):
-            healthy, message = check_cbir_health()
+            healthy, message = check_cbir_health(use_cache=False)
             assert healthy is True
             assert "healthy" in message.lower()
     
@@ -1422,7 +1430,7 @@ class TestCBIRHealthCheck:
         mock_response.json.return_value = {"model": True, "database": False}
         
         with patch('app.utils.docker_cbir.requests.get', return_value=mock_response):
-            healthy, message = check_cbir_health()
+            healthy, message = check_cbir_health(use_cache=False)
             assert healthy is False
             assert "partially" in message.lower()
     
@@ -1434,7 +1442,7 @@ class TestCBIRHealthCheck:
         
         with patch('app.utils.docker_cbir.requests.get', 
                    side_effect=requests.RequestException("Connection refused")):
-            healthy, message = check_cbir_health()
+            healthy, message = check_cbir_health(use_cache=False)
             assert healthy is False
             assert "Failed to connect" in message
     
@@ -1447,7 +1455,7 @@ class TestCBIRHealthCheck:
         mock_response.status_code = 500
         
         with patch('app.utils.docker_cbir.requests.get', return_value=mock_response):
-            healthy, message = check_cbir_health()
+            healthy, message = check_cbir_health(use_cache=False)
             assert healthy is False
             assert "status 500" in message
     

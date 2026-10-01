@@ -106,3 +106,12 @@ def test_user_data_2():
         "password": "Test@Password456",
         "full_name": "Test User 2"
     }
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limits():
+    """Login/registration limiters are process-global: start every test with a clean slate."""
+    from app.routes import auth
+
+    for limiter in (auth.login_failures_by_account, auth.login_failures_by_ip, auth.registrations_by_ip):
+        limiter.clear()

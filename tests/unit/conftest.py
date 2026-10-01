@@ -93,15 +93,6 @@ def fake_redis(monkeypatch):
     return server
 
 
-@pytest.fixture(autouse=True)
-def reset_rate_limits():
-    """Rate limiters are process-global; start every test with a clean slate."""
-    from app.routes import auth
-
-    for limiter in (auth.login_failures_by_account, auth.login_failures_by_ip, auth.registrations_by_ip):
-        limiter.clear()
-
-
 @pytest.fixture
 def client(mock_db):
     with TestClient(app, raise_server_exceptions=False) as test_client:
