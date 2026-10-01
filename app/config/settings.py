@@ -1,46 +1,98 @@
 """
 Application-wide configuration settings
 
-This module centralizes all hardcoded configuration values to make the
-application more maintainable and configurable. All magic numbers and
-strings are defined here as constants.
-
-To customize settings:
-1. Modify the constants below
-2. Import from this module in your code
-3. No need to change multiple files
+Every value that can differ between deployments is read from the environment
+here (documented in .env.example), so the API and the Celery workers share one
+validated configuration. Constants that are not deployment-specific live here
+too, to keep magic numbers out of the code.
 """
 
 import os
 from pathlib import Path
-from typing import Union
+from typing import List, Union
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        raise ValueError(f"Environment variable {name} must be an integer, got {value!r}")
+
+
+def _env_float(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        raise ValueError(f"Environment variable {name} must be a number, got {value!r}")
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
+def _env_list(name: str, default: List[str]) -> List[str]:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return list(default)
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def _required_path(name: str) -> Path:
+    value = os.getenv(name)
+    if not value:
+        raise ValueError(f"{name} environment variable must be set (see .env.example)")
+    return Path(value)
+
 
 # ============================================================================
 # FILE STORAGE SETTINGS
 # ============================================================================
 
-# Base directory for all user uploads and workspace files
+# Workspace root as seen by this process (inside the API/worker containers)
+CONTAINER_WORKSPACE_PATH = _required_path("CONTAINER_WORKSPACE_PATH")
+# The same directory as seen by the Docker daemon on the host (for tool mounts)
+HOST_WORKSPACE_PATH = _required_path("HOST_WORKSPACE_PATH")
 
-
-
-
-# Path constants
-CONTAINER_WORKSPACE_PATH = Path(os.getenv("CONTAINER_WORKSPACE_PATH"))
-if CONTAINER_WORKSPACE_PATH is None:
-    raise ValueError("CONTAINER_WORKSPACE_PATH environment variable must be set")
 EXTRACTION_SUBDIRECTORY = "images/extracted"
 
-# Workspace root directory (can be overridden by environment variable)
-HOST_WORKSPACE_PATH = Path(os.getenv("HOST_WORKSPACE_PATH"))
-if HOST_WORKSPACE_PATH is None:
-    raise ValueError("HOST_WORKSPACE_PATH environment variable must be set")
+# Base directory for all user uploads and workspace files
+UPLOAD_DIR = CONTAINER_WORKSPACE_PATH
 
-RUNNING_ENV =os.getenv("ENVIRONMENT", "")
-if RUNNING_ENV != "TEST":
-    # Use absolute path for workspace to avoid issues with relative paths in different contexts
-    UPLOAD_DIR = Path(CONTAINER_WORKSPACE_PATH)
-else:
-    UPLOAD_DIR = Path(HOST_WORKSPACE_PATH)
+# ============================================================================
+# LOGGING, CORS AND SERVICE CONNECTIONS
+# ============================================================================
+
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+
+# Browser origins allowed to call the API (comma-separated)
+ALLOWED_ORIGINS = _env_list(
+    "ALLOWED_ORIGINS",
+    ["http://localhost:5173", "http://127.0.0.1:5173", "http://localhost:3000", "http://127.0.0.1:3000"],
+)
+
+# Redis (Celery broker and result backend)
+REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
+REDIS_PORT = _env_int("REDIS_PORT", 6379)
+REDIS_DB = _env_int("REDIS_DB", 0)
+REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", "")
+
+
+def _redis_url(db: int) -> str:
+    auth = f":{REDIS_PASSWORD}@" if REDIS_PASSWORD else ""
+    return f"redis://{auth}{REDIS_HOST}:{REDIS_PORT}/{db}"
+
+
+CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL") or _redis_url(REDIS_DB)
+CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND") or _redis_url(REDIS_DB + 1)
 
 
 # ============================================================================
@@ -83,7 +135,7 @@ COPY_MOVE_KEYPOINT_TIMEOUT = 600  # 10 minutes
 TRUFOR_DOCKER_IMAGE = "trufor:latest"
 TRUFOR_TIMEOUT = 600  # 10 minutes
 TRUFOR_DOCKER_WORKDIR = CONTAINER_WORKSPACE_PATH
-TRUFOR_USE_GPU = os.getenv("TRUFOR_USE_GPU", "true").lower() == "true"
+TRUFOR_USE_GPU = _env_bool("TRUFOR_USE_GPU", False)
 
 # ============================================================================
 # CBIR (Content-Based Image Retrieval) SETTINGS
@@ -92,15 +144,15 @@ TRUFOR_USE_GPU = os.getenv("TRUFOR_USE_GPU", "true").lower() == "true"
 # When running locally, use 'localhost:8001'
 # The CBIR_SERVICE_HOST is the hostname/IP of the CBIR microservice
 CBIR_SERVICE_HOST = os.getenv("CBIR_SERVICE_HOST", "localhost")
-CBIR_SERVICE_PORT = int(os.getenv("CBIR_SERVICE_PORT", "8001"))
+CBIR_SERVICE_PORT = _env_int("CBIR_SERVICE_PORT", 8001)
 CBIR_SERVICE_URL = os.getenv(
     "CBIR_SERVICE_URL",
     f"http://{CBIR_SERVICE_HOST}:{CBIR_SERVICE_PORT}"
 )
-CBIR_TIMEOUT = int(os.getenv("CBIR_TIMEOUT", "120"))  # 2 minutes default
+CBIR_TIMEOUT = _env_int("CBIR_TIMEOUT", 120)  # 2 minutes default
 
 # Batch indexing: number of images to process per chunk for progress updates
-INDEXING_BATCH_CHUNK_SIZE = int(os.getenv("INDEXING_BATCH_CHUNK_SIZE", "16"))
+INDEXING_BATCH_CHUNK_SIZE = _env_int("INDEXING_BATCH_CHUNK_SIZE", 16)
 
 # ============================================================================
 # PROVENANCE ANALYSIS SETTINGS
@@ -108,12 +160,12 @@ INDEXING_BATCH_CHUNK_SIZE = int(os.getenv("INDEXING_BATCH_CHUNK_SIZE", "16"))
 # When running inside Docker, use container name 'provenance-service'
 # When running locally, use 'localhost:8002'
 PROVENANCE_SERVICE_HOST = os.getenv("PROVENANCE_SERVICE_HOST", "localhost")
-PROVENANCE_SERVICE_PORT = int(os.getenv("PROVENANCE_SERVICE_PORT", "8002"))
+PROVENANCE_SERVICE_PORT = _env_int("PROVENANCE_SERVICE_PORT", 8002)
 PROVENANCE_SERVICE_URL = os.getenv(
     "PROVENANCE_SERVICE_URL",
     f"http://{PROVENANCE_SERVICE_HOST}:{PROVENANCE_SERVICE_PORT}"
 )
-PROVENANCE_TIMEOUT = int(os.getenv("PROVENANCE_TIMEOUT", "600"))  # 10 minutes default
+PROVENANCE_TIMEOUT = _env_int("PROVENANCE_TIMEOUT", 600)  # 10 minutes default
 
 # Extraction timeouts (in seconds)
 DOCKER_EXTRACTION_TIMEOUT = 300  # 5 minutes
@@ -139,7 +191,7 @@ CELERY_RETRY_BACKOFF_BASE = 2  # Exponential backoff multiplier
 CELERY_RESULT_EXPIRES = 3600  # 1 hour
 
 # Job monitoring settings
-JOB_RETENTION_DAYS = int(os.getenv("JOB_RETENTION_DAYS", "7"))  # Days to retain job logs
+JOB_RETENTION_DAYS = _env_int("JOB_RETENTION_DAYS", 7)  # Days to retain job logs
 
 # Redis connection timeouts
 CELERY_REDIS_SOCKET_CONNECT_TIMEOUT = 5
@@ -183,13 +235,13 @@ THUMBNAIL_JPEG_QUALITY = 85  # JPEG quality (1-100)
 
 # Largest image (width * height) accepted on upload or decoded for thumbnails.
 # Guards against decompression bombs; raise it for very large microscopy scans.
-MAX_IMAGE_PIXELS = int(os.getenv("MAX_IMAGE_PIXELS", str(200_000_000)))
+MAX_IMAGE_PIXELS = _env_int("MAX_IMAGE_PIXELS", 200_000_000)
 
 # Maximum number of files accepted by one batch image upload request
-MAX_BATCH_UPLOAD_FILES = int(os.getenv("MAX_BATCH_UPLOAD_FILES", "200"))
+MAX_BATCH_UPLOAD_FILES = _env_int("MAX_BATCH_UPLOAD_FILES", 200)
 
 # Password hashing settings
-BCRYPT_ROUNDS = int(os.getenv("BCRYPT_ROUNDS", "12"))  # bcrypt cost factor (tests lower it for speed)
+BCRYPT_ROUNDS = _env_int("BCRYPT_ROUNDS", 12)  # bcrypt cost factor (tests lower it for speed)
 
 # ============================================================================
 # UTILITY FUNCTIONS

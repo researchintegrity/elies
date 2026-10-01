@@ -7,8 +7,10 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.config.settings import ALLOWED_ORIGINS, LOG_LEVEL
 from app.db.mongodb import db_connection
 from app.exceptions import ELIESException
+from app.logging_config import configure_logging
 from app.utils.security import RedactTokenFilter
 from app.routes import (
     admin,
@@ -26,6 +28,7 @@ from app.routes import (
     users,
 )
 
+configure_logging(LOG_LEVEL)
 logger = logging.getLogger(__name__)
 
 # Media URLs carry ?token=...; keep bearer tokens out of the access log
@@ -40,22 +43,15 @@ app = FastAPI(
     redoc_url="/redoc"
 )
 
-# Add CORS middleware -- During production, restrict origins appropriately
+# CORS: only the configured frontend origins (ALLOWED_ORIGINS). The frontend
+# authenticates with a bearer header, so credentialed CORS is not needed.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:5173",  # Vite dev server
-        "http://localhost:3000",  # Alternative dev server
-        "http://localhost:8000",  # API itself
-        "http://127.0.0.1:5173",
-        "http://127.0.0.1:3000",
-        "http://127.0.0.1:8000",
-        "*"  # Allow all origins (for development)
-    ],
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
-    expose_headers=["*"],
+    expose_headers=["Content-Disposition"],
     max_age=600,
 )
 

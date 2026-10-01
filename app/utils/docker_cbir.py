@@ -18,17 +18,11 @@ logger = logging.getLogger(__name__)
 
 def _convert_cbir_path_to_response(cbir_path: str, user_id: str) -> str:
     """
-    Convert a CBIR path back to the format used by our backend.
-    
-    Args:
-        cbir_path: Path from CBIR (e.g., /workspace/user_id/images/...)
-        user_id: User ID for validation
-        
-    Returns:
-        Path in backend format (workspace/user_id/...)
+    Map a path returned by CBIR back to the backend's stored format.
+
+    The backend sends container paths (under CONTAINER_WORKSPACE_PATH) to CBIR,
+    which returns them unchanged, so they already match ``images.file_path``.
     """
-    if cbir_path.startswith("/workspace/"):
-        return f"workspace{cbir_path[len('/workspace'):]}"
     return cbir_path
 
 

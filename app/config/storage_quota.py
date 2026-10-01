@@ -1,26 +1,37 @@
 """
 Storage Quota Configuration
 
-This module defines storage quota limits for the ELIES system.
-All limits are in bytes. Modify these values to adjust quotas globally.
-
-To modify quotas:
-1. Change the constant values below
-2. No code changes needed - the system uses these constants everywhere
-3. Restart the application
+Storage limits for the ELIES system, in bytes. They are configured through
+the environment (DEFAULT_USER_STORAGE_QUOTA_GB, PDF_MAX_SIZE_MB,
+IMAGE_MAX_SIZE_MB); per-user quotas can also be changed by admins.
 """
 
 # ============================================================================
 # STORAGE QUOTA CONFIGURATION
 # ============================================================================
 
-# Default storage quota per user (in bytes)
-# 1 GB = 1,073,741,824 bytes
-DEFAULT_USER_STORAGE_QUOTA = 1 * 1024 * 1024 * 1024  # 1 GB
+import os
 
-# Individual file limits (in bytes)
-MAX_PDF_FILE_SIZE = 500 * 1024 * 1024  # 500 MB per PDF
-MAX_IMAGE_FILE_SIZE = 100 * 1024 * 1024  # 100 MB per image
+_MB = 1024 * 1024
+_GB = 1024 * _MB
+
+
+def _env_number(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        raise ValueError(f"Environment variable {name} must be a number, got {value!r}")
+
+
+# Default storage quota per user (DEFAULT_USER_STORAGE_QUOTA_GB, default 1 GB)
+DEFAULT_USER_STORAGE_QUOTA = int(_env_number("DEFAULT_USER_STORAGE_QUOTA_GB", 1) * _GB)
+
+# Individual file limits (PDF_MAX_SIZE_MB default 500, IMAGE_MAX_SIZE_MB default 100)
+MAX_PDF_FILE_SIZE = int(_env_number("PDF_MAX_SIZE_MB", 500) * _MB)
+MAX_IMAGE_FILE_SIZE = int(_env_number("IMAGE_MAX_SIZE_MB", 100) * _MB)
 
 # ============================================================================
 # UTILITY FUNCTIONS
@@ -66,25 +77,3 @@ def get_quota_info(used_bytes: int, quota_bytes: int = DEFAULT_USER_STORAGE_QUOT
         "remaining_formatted": format_bytes(max(0, remaining)),
         "used_percentage": round(used_percentage, 2),
     }
-
-
-# ============================================================================
-# QUICK REFERENCE
-# ============================================================================
-
-"""
-QUICK REFERENCE - How to modify quotas:
-
-1. CHANGE DEFAULT QUOTA:
-   DEFAULT_USER_STORAGE_QUOTA = 2 * 1024 * 1024 * 1024  # Change to 2 GB
-   
-  
-  2. CHANGE PDF FILE LIMIT:
-     MAX_PDF_FILE_SIZE = 100 * 1024 * 1024  # Change to 100 MB
-     
-  3. CHANGE IMAGE FILE LIMIT:
-     MAX_IMAGE_FILE_SIZE = 20 * 1024 * 1024  # Change to 20 MB
-
-After modifying, restart the application:
-   python -m uvicorn app.main:app --reload
-"""

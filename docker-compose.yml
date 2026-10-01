@@ -1,17 +1,15 @@
-version: "3.8"
-
 services:
   # FastAPI Application
   api:
     build: .
+    env_file: .env
     ports:
-      - "${API_PORT:-8000}:${API_PORT:-8000}"
+      - "${API_BIND_ADDRESS:-0.0.0.0}:${API_PORT:-8000}:${API_PORT:-8000}"
     environment:
-      MONGODB_URL: mongodb://mongo:27017
+      MONGODB_URL: ${MONGODB_URL:-mongodb://mongo:27017}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (see .env.example)}
-      JWT_EXPIRATION_HOURS: 24
       CONTAINER_WORKSPACE_PATH: ${CONTAINER_WORKSPACE_PATH}
       HOST_WORKSPACE_PATH: ${HOST_WORKSPACE_PATH}
       # CBIR service configuration (use container name when running in Docker)
@@ -19,10 +17,12 @@ services:
       CBIR_SERVICE_PORT: ${CBIR_SERVICE_PORT:-8001}
       # Provenance service configuration
       PROVENANCE_SERVICE_HOST: provenance-service
-      PROVENANCE_SERVICE_PORT: ${PROVENANCE_SERVICE_PORT:-8000}
+      PROVENANCE_SERVICE_PORT: ${PROVENANCE_SERVICE_PORT:-8002}
     depends_on:
-      - mongo
-      - redis
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - ${HOST_WORKSPACE_PATH}:${CONTAINER_WORKSPACE_PATH}
     command: uvicorn app.main:app --host 0.0.0.0 --port ${API_PORT:-8000} --reload
@@ -33,26 +33,35 @@ services:
   # Redis Message Broker
   redis:
     image: redis:7-alpine
+    # Set REDIS_PASSWORD in .env to require authentication (recommended)
+    command: >
+      sh -c 'if [ -n "$$REDIS_PASSWORD" ]; then exec redis-server --requirepass "$$REDIS_PASSWORD";
+      else exec redis-server; fi'
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "${BIND_ADDRESS:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "if [ -n \"$$REDIS_PASSWORD\" ]; then redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping; else redis-cli ping; fi | grep -q PONG"]
       interval: 5s
       timeout: 3s
       retries: 5
     networks:
       - elies_network
 
-  # MongoDB Database (unauthenticated for local development)
+  # MongoDB Database
+  # Authentication: set MONGO_ROOT_USERNAME/MONGO_ROOT_PASSWORD before the first start
+  # (they only apply to an empty data volume) and point MONGODB_URL at
+  # mongodb://<user>:<password>@mongo:27017/?authSource=admin
   mongo:
     image: mongo:7
     ports:
-      - "${MONGODB_PORT:-27017}:27017"
-    # environment:
-    #   MONGO_INITDB_ROOT_USERNAME: admin
-    #   MONGO_INITDB_ROOT_PASSWORD: password
+      - "${BIND_ADDRESS:-127.0.0.1}:${MONGODB_PORT:-27017}:27017"
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USERNAME:-}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-}
     volumes:
       - mongo_data:/data/db
     healthcheck:
@@ -68,8 +77,9 @@ services:
   # Celery Worker 1
   worker_1:
     build: .
+    env_file: .env
     environment:
-      MONGODB_URL: mongodb://mongo:27017
+      MONGODB_URL: ${MONGODB_URL:-mongodb://mongo:27017}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       CONTAINER_WORKSPACE_PATH: ${CONTAINER_WORKSPACE_PATH}
@@ -81,10 +91,12 @@ services:
       CBIR_SERVICE_PORT: ${CBIR_SERVICE_PORT:-8001}
       # Provenance service configuration
       PROVENANCE_SERVICE_HOST: provenance-service
-      PROVENANCE_SERVICE_PORT: ${PROVENANCE_SERVICE_PORT:-8000}
+      PROVENANCE_SERVICE_PORT: ${PROVENANCE_SERVICE_PORT:-8002}
     depends_on:
-      - redis
-      - mongo
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - ${HOST_WORKSPACE_PATH}:${CONTAINER_WORKSPACE_PATH}
       - /var/run/docker.sock:/var/run/docker.sock
@@ -97,8 +109,9 @@ services:
   # Celery Worker 2
   worker_2:
     build: .
+    env_file: .env
     environment:
-      MONGODB_URL: mongodb://mongo:27017
+      MONGODB_URL: ${MONGODB_URL:-mongodb://mongo:27017}
       REDIS_HOST: redis
       REDIS_PORT: 6379
       CONTAINER_WORKSPACE_PATH: ${CONTAINER_WORKSPACE_PATH}
@@ -110,10 +123,12 @@ services:
       CBIR_SERVICE_PORT: ${CBIR_SERVICE_PORT:-8001}
       # Provenance service configuration
       PROVENANCE_SERVICE_HOST: provenance-service
-      PROVENANCE_SERVICE_PORT: ${PROVENANCE_SERVICE_PORT:-8000}
+      PROVENANCE_SERVICE_PORT: ${PROVENANCE_SERVICE_PORT:-8002}
     depends_on:
-      - redis
-      - mongo
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     volumes:
       - ${HOST_WORKSPACE_PATH}:${CONTAINER_WORKSPACE_PATH}
       - /var/run/docker.sock:/var/run/docker.sock
@@ -130,7 +145,7 @@ services:
       context: system_modules/provenance-analysis
       dockerfile: Dockerfile.api
     ports:
-      - "${PROVENANCE_SERVICE_PORT:-8002}:${PROVENANCE_SERVICE_PORT:-8000}"
+      - "${BIND_ADDRESS:-127.0.0.1}:${PROVENANCE_SERVICE_PORT:-8002}:${PROVENANCE_SERVICE_PORT:-8002}"
     volumes:
       - ${HOST_WORKSPACE_PATH}:${CONTAINER_WORKSPACE_PATH}
       - provenance_output:/app/output
@@ -138,21 +153,22 @@ services:
       - CBIR_ENDPOINT=http://cbir-service:${CBIR_SERVICE_PORT:-8001}
       - PROVENANCE_OUTPUT_DIR=/app/output
       - REMOTE_DATA_PATH=${CONTAINER_WORKSPACE_PATH}
-      - PROVENANCE_SERVICE_PORT=${PROVENANCE_SERVICE_PORT:-8000}
+      - PROVENANCE_SERVICE_PORT=${PROVENANCE_SERVICE_PORT:-8002}
     networks:
       - elies_network
       - milvus
 
+  # Celery dashboard (shows task arguments): keep it off public interfaces
   flower:
     image: mher/flower:2.0
     ports:
-      - "${FLOWER_PORT:-5555}:5555"
+      - "${BIND_ADDRESS:-127.0.0.1}:${FLOWER_PORT:-5555}:5555"
     environment:
-      CELERY_BROKER_URL: redis://redis:6379/0
-      CELERY_RESULT_BACKEND: redis://redis:6379/1
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-}@redis:6379/1
     depends_on:
       - redis
-    command: celery --broker=redis://redis:6379/0 flower --port=5555
+    command: celery --broker=redis://:${REDIS_PASSWORD:-}@redis:6379/0 flower --port=5555
     networks:
       - elies_network
 
@@ -186,8 +202,8 @@ services:
       MINIO_SECRET_KEY: minioadmin
       MINIO_API_PORT: 9010
     ports:
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
-      - "${MINIO_API_PORT:-9010}:9000"
+      - "${BIND_ADDRESS:-127.0.0.1}:${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "${BIND_ADDRESS:-127.0.0.1}:${MINIO_API_PORT:-9010}:9000"
     volumes:
       - milvus_minio_data:/minio_data
     command: minio server /minio_data --console-address ":9001"
@@ -217,8 +233,8 @@ services:
       timeout: 20s
       retries: 3
     ports:
-      - "${MILVUS_PORT:-19530}:19530"
-      - "${MILVUS_METRICS_PORT:-9091}:9091"
+      - "${BIND_ADDRESS:-127.0.0.1}:${MILVUS_PORT:-19530}:19530"
+      - "${BIND_ADDRESS:-127.0.0.1}:${MILVUS_METRICS_PORT:-9091}:9091"
     depends_on:
       - "etcd"
       - "minio"
@@ -231,7 +247,7 @@ services:
     environment:
       MILVUS_URL: milvus-standalone:19530
     ports:
-      - "${ATTU_PORT:-3322}:3000"
+      - "${BIND_ADDRESS:-127.0.0.1}:${ATTU_PORT:-3322}:3000"
     depends_on:
       - milvus-standalone
     networks:
@@ -243,7 +259,7 @@ services:
       context: system_modules/cbir-system
       dockerfile: docker/Dockerfile
     ports:
-      - "${CBIR_SERVICE_PORT:-8001}:${CBIR_SERVICE_PORT:-8001}"
+      - "${BIND_ADDRESS:-127.0.0.1}:${CBIR_SERVICE_PORT:-8001}:${CBIR_SERVICE_PORT:-8001}"
     volumes:
       - ./system_modules/cbir-system/src:/app/src
       - ./system_modules/cbir-system/config:/app/config
