@@ -30,7 +30,7 @@ from app.utils.file_storage import (
 logger = logging.getLogger(__name__)
 
 
-async def delete_document_and_artifacts(
+def delete_document_and_artifacts(
     document_id: str,
     user_id: str
 ) -> dict:

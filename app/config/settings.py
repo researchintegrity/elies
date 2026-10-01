@@ -150,6 +150,8 @@ CBIR_SERVICE_URL = os.getenv(
     f"http://{CBIR_SERVICE_HOST}:{CBIR_SERVICE_PORT}"
 )
 CBIR_TIMEOUT = _env_int("CBIR_TIMEOUT", 120)  # 2 minutes default
+# How long a CBIR health check result is reused before asking the service again
+CBIR_HEALTH_CACHE_SECONDS = _env_int("CBIR_HEALTH_CACHE_SECONDS", 15)
 
 # Batch indexing: number of images to process per chunk for progress updates
 INDEXING_BATCH_CHUNK_SIZE = _env_int("INDEXING_BATCH_CHUNK_SIZE", 16)

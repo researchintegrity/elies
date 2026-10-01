@@ -45,7 +45,7 @@ router = APIRouter(
 
 
 @router.get("/health", response_model=CBIRStatusResponse)
-async def cbir_health():
+def cbir_health():
     """
     Check CBIR service health status.
     
@@ -56,7 +56,7 @@ async def cbir_health():
 
 
 @router.post("/index", status_code=status.HTTP_202_ACCEPTED)
-async def index_images(
+def index_images(
     request: CBIRIndexRequest = None,
     current_user: dict = Depends(get_current_user)
 ):
@@ -141,7 +141,7 @@ async def index_images(
 
 
 @router.post("/search", status_code=status.HTTP_202_ACCEPTED)
-async def search_similar(
+def search_similar(
     request: CBIRSearchRequest,
     current_user: dict = Depends(get_current_user)
 ):
@@ -214,7 +214,7 @@ async def search_similar(
 
 
 @router.post("/search/sync", response_model=CBIRSearchResponse)
-async def search_similar_sync(
+def search_similar_sync(
     request: CBIRSearchRequest,
     current_user: dict = Depends(get_current_user)
 ):
@@ -272,7 +272,7 @@ async def search_similar_sync(
 
 
 @router.post("/search/upload", response_model=CBIRSearchResponse)
-async def search_by_upload(
+def search_by_upload(
     file: UploadFile = File(...),
     top_k: int = Query(10, ge=1, le=100),
     labels: Optional[List[str]] = Query(None),
@@ -286,7 +286,7 @@ async def search_by_upload(
     user_id = str(current_user["_id"])
     
     # Read uploaded file
-    image_data = await file.read()
+    image_data = file.file.read()
     
     # Perform search via upload endpoint
     success, message, results = search_similar_images_upload(
@@ -316,7 +316,7 @@ async def search_by_upload(
 
 
 @router.delete("/index", status_code=status.HTTP_202_ACCEPTED)
-async def delete_from_index(
+def delete_from_index(
     request: CBIRDeleteRequest,
     current_user: dict = Depends(get_current_user)
 ):
@@ -356,7 +356,7 @@ async def delete_from_index(
 
 
 @router.delete("/index/all", status_code=status.HTTP_202_ACCEPTED)
-async def delete_all_from_index(
+def delete_all_from_index(
     current_user: dict = Depends(get_current_user)
 ):
     """

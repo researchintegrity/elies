@@ -12,7 +12,7 @@ router = APIRouter(prefix="/users", tags=["Users"])
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_current_user_info(current_user: dict = Depends(get_current_active_user)) -> dict:
+def get_current_user_info(current_user: dict = Depends(get_current_active_user)) -> dict:
     """
     Get current authenticated user information
     
@@ -25,7 +25,7 @@ async def get_current_user_info(current_user: dict = Depends(get_current_active_
 
 
 @router.put("/me", response_model=UserResponse)
-async def update_current_user(
+def update_current_user(
     update_data: UserUpdate,
     current_user: dict = Depends(get_current_active_user)
 ) -> dict:
@@ -71,7 +71,7 @@ async def update_current_user(
 
 
 @router.delete("/me", response_model=MessageResponse)
-async def delete_current_user(current_user: dict = Depends(get_current_active_user)) -> dict:
+def delete_current_user(current_user: dict = Depends(get_current_active_user)) -> dict:
     """
     Delete current user account
     
@@ -85,7 +85,7 @@ async def delete_current_user(current_user: dict = Depends(get_current_active_us
 
 
 @router.get("/{username}", response_model=UserResponse)
-async def get_user_by_username(
+def get_user_by_username(
     username: str,
     current_user: dict = Depends(get_current_active_user)
 ) -> dict:

@@ -28,7 +28,7 @@ def _normalize_image_ids(image1_id: str, image2_id: str) -> Tuple[str, str]:
     return tuple(sorted([image1_id, image2_id]))
 
 
-async def create_relationship(
+def create_relationship(
     user_id: str,
     image1_id: str,
     image2_id: str,
@@ -114,7 +114,7 @@ async def create_relationship(
     return relationship_doc
 
 
-async def remove_relationship(
+def remove_relationship(
     relationship_id: str,
     user_id: str
 ) -> bool:
@@ -137,7 +137,7 @@ async def remove_relationship(
         return False
 
 
-async def remove_relationships_for_image(
+def remove_relationships_for_image(
     image_id: str,
     user_id: str
 ) -> int:
@@ -164,7 +164,7 @@ async def remove_relationships_for_image(
     return result.deleted_count
 
 
-async def get_relationships_for_image(
+def get_relationships_for_image(
     image_id: str,
     user_id: str,
     include_image_details: bool = True
@@ -220,7 +220,7 @@ async def get_relationships_for_image(
     return relationships
 
 
-async def get_relationship_graph(
+def get_relationship_graph(
     image_id: str,
     user_id: str,
     max_depth: int = 5

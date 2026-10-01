@@ -247,7 +247,7 @@ def upload_images_batch(
 
 
 @router.get("/indexing-status/{job_id}", response_model=IndexingJobResponse)
-async def get_indexing_status(
+def get_indexing_status(
     job_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -295,7 +295,7 @@ async def get_indexing_status(
 
 
 @router.get("", response_model=PaginatedImageResponse)
-async def list_images(
+def list_images(
     current_user: dict = Depends(get_current_user),
     source_type: str = Query(None, description="Filter by 'extracted' or 'uploaded'"),
     document_id: str = Query(None, description="Filter by document ID"),
@@ -342,7 +342,7 @@ async def list_images(
         parsed_image_type = [t.strip() for t in image_type.split(",")] if image_type else None
         
         # Use service to get images with all filter parameters
-        result = await list_images_service(
+        result = list_images_service(
             user_id=user_id_str,
             source_type=source_type,
             document_id=document_id,
@@ -383,7 +383,7 @@ async def list_images(
 
 
 @router.get("/tags", response_model=List[str])
-async def get_all_tags(
+def get_all_tags(
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -409,7 +409,7 @@ async def get_all_tags(
 
 
 @router.get("/ids", response_model=dict)
-async def get_all_image_ids(
+def get_all_image_ids(
     image_type: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -473,7 +473,7 @@ async def get_all_image_ids(
     return {"ids": ids, "count": len(ids)}
 
 @router.get("/{image_id}", response_model=ImageResponse)
-async def get_image(
+def get_image(
     image_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -490,7 +490,7 @@ async def get_image(
     user_id_str = str(current_user["_id"])
     user_quota = current_user.get("storage_limit_bytes", DEFAULT_USER_STORAGE_QUOTA)
     
-    img = await get_owned_resource(
+    img = get_owned_resource(
         get_images_collection,
         image_id,
         user_id_str,
@@ -506,7 +506,7 @@ async def get_image(
 
 
 @router.get("/{image_id}/download")
-async def download_image(
+def download_image(
     image_id: str,
     current_user: dict = Depends(get_current_user_media)
 ):
@@ -523,7 +523,7 @@ async def download_image(
     user_id_str = str(current_user["_id"])
     
     # Verify image belongs to user
-    img = await get_owned_resource(
+    img = get_owned_resource(
         get_images_collection,
         image_id,
         user_id_str,
@@ -559,7 +559,7 @@ async def download_image(
 
 
 @router.get("/{image_id}/thumbnail")
-async def get_image_thumbnail(
+def get_image_thumbnail(
     image_id: str,
     current_user: dict = Depends(get_current_user_media)
 ):
@@ -580,7 +580,7 @@ async def get_image_thumbnail(
     user_id_str = str(current_user["_id"])
     
     # Verify image belongs to user
-    img = await get_owned_resource(
+    img = get_owned_resource(
         get_images_collection,
         image_id,
         user_id_str,
@@ -616,7 +616,7 @@ async def get_image_thumbnail(
             # If thumbnail generation fails, fallback to original (pass-through)
             logger.warning("Thumbnail generation failed for image %s: %s", image_id, e)
             # Fallback to download_image logic
-            return await download_image(image_id, current_user)
+            return download_image(image_id, current_user)
 
     # Return thumbnail
     return FileResponse(
@@ -627,7 +627,7 @@ async def get_image_thumbnail(
 
 
 @router.patch("/{image_id}/flag", response_model=ImageResponse)
-async def toggle_image_flag(
+def toggle_image_flag(
     image_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -686,7 +686,7 @@ async def toggle_image_flag(
 
 
 @router.delete("/{image_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_image(
+def delete_image(
     image_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -697,7 +697,7 @@ async def delete_image(
         image_id: Image ID
         current_user: Current authenticated user
     """
-    await delete_image_and_artifacts(
+    delete_image_and_artifacts(
         image_id=image_id,
         user_id=str(current_user["_id"])
     )
@@ -712,7 +712,7 @@ async def delete_image(
     response_model=PanelExtractionInitiationResponse,
     status_code=status.HTTP_202_ACCEPTED
 )
-async def initiate_panel_extraction_endpoint(
+def initiate_panel_extraction_endpoint(
     request: PanelExtractionRequest,
     current_user: dict = Depends(get_current_user)
 ):
@@ -797,7 +797,7 @@ async def initiate_panel_extraction_endpoint(
     response_model=PanelExtractionStatusResponse,
     status_code=status.HTTP_200_OK
 )
-async def get_panel_extraction_status_endpoint(
+def get_panel_extraction_status_endpoint(
     task_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -848,7 +848,7 @@ async def get_panel_extraction_status_endpoint(
     response_model=List[ImageResponse],
     status_code=status.HTTP_200_OK
 )
-async def get_panels_from_image(
+def get_panels_from_image(
     image_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -927,7 +927,7 @@ async def get_panels_from_image(
 # ============================================================================
 
 @router.post("/{image_id}/types", response_model=ImageResponse, status_code=status.HTTP_200_OK)
-async def add_image_types(
+def add_image_types(
     image_id: str,
     request: ImageTypesUpdateRequest,
     current_user: dict = Depends(get_current_user)
@@ -1032,7 +1032,7 @@ async def add_image_types(
 
 
 @router.delete("/{image_id}/types/{type_name}", response_model=ImageResponse, status_code=status.HTTP_200_OK)
-async def remove_image_type(
+def remove_image_type(
     image_id: str,
     type_name: str,
     current_user: dict = Depends(get_current_user)
@@ -1132,7 +1132,7 @@ async def remove_image_type(
 
 
 @router.get("/types/all", status_code=status.HTTP_200_OK)
-async def list_all_image_types(
+def list_all_image_types(
     current_user: dict = Depends(get_current_user)
 ):
     """

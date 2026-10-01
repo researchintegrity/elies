@@ -30,7 +30,7 @@ router = APIRouter(
 
 
 @router.get("/stats", response_model=dict)
-async def get_analysis_stats(
+def get_analysis_stats(
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -220,7 +220,7 @@ def list_analyses(
 
 
 @router.get("/by-image/{image_id}", response_model=list)
-async def list_analyses_by_image(
+def list_analyses_by_image(
     image_id: str,
     current_user: dict = Depends(get_current_user),
     limit: int = Query(50, ge=1, le=100, description="Maximum number of analyses to return"),
@@ -272,7 +272,7 @@ async def list_analyses_by_image(
 
 
 @router.get("/{analysis_id}", response_model=AnalysisResponse)
-async def get_analysis(
+def get_analysis(
     analysis_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -300,7 +300,7 @@ async def get_analysis(
 
 
 @router.delete("/{analysis_id}", status_code=status.HTTP_200_OK)
-async def delete_analysis(
+def delete_analysis(
     analysis_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -397,7 +397,7 @@ async def delete_analysis(
 
 
 @router.get("/{analysis_id}/results/{result_type}/download")
-async def download_analysis_result(
+def download_analysis_result(
     analysis_id: str,
     result_type: str,
     current_user: dict = Depends(get_current_user_media)
@@ -495,7 +495,7 @@ async def download_analysis_result(
 
 
 @router.post("/copy-move/single", status_code=status.HTTP_202_ACCEPTED, response_model=dict)
-async def analyze_copy_move_single(
+def analyze_copy_move_single(
     request: SingleImageAnalysisCreate,
     current_user: dict = Depends(get_current_user)
 ):
@@ -509,7 +509,7 @@ async def analyze_copy_move_single(
     user_id_str = str(current_user["_id"])
     
     # Verify ownership
-    image = await get_owned_resource(
+    image = get_owned_resource(
         get_images_collection,
         request.image_id,
         user_id_str,
@@ -572,7 +572,7 @@ async def analyze_copy_move_single(
 
 
 @router.post("/copy-move/cross", status_code=status.HTTP_202_ACCEPTED, response_model=dict)
-async def analyze_copy_move_cross(
+def analyze_copy_move_cross(
     request: CrossImageAnalysisCreate,
     current_user: dict = Depends(get_current_user)
 ):
@@ -589,14 +589,14 @@ async def analyze_copy_move_cross(
     user_id_str = str(current_user["_id"])
     
     # Verify ownership of both images
-    source_image = await get_owned_resource(
+    source_image = get_owned_resource(
         get_images_collection,
         request.source_image_id,
         user_id_str,
         "Source Image"
     )
     
-    target_image = await get_owned_resource(
+    target_image = get_owned_resource(
         get_images_collection,
         request.target_image_id,
         user_id_str,
@@ -670,7 +670,7 @@ async def analyze_copy_move_cross(
     }
 
 @router.post("/trufor", status_code=status.HTTP_202_ACCEPTED, response_model=dict)
-async def analyze_trufor(
+def analyze_trufor(
     request: TruForAnalysisCreate,
     current_user: dict = Depends(get_current_user)
 ):
@@ -684,7 +684,7 @@ async def analyze_trufor(
     user_id_str = str(current_user["_id"])
     
     # Verify ownership
-    image = await get_owned_resource(
+    image = get_owned_resource(
         get_images_collection,
         request.image_id,
         user_id_str,
@@ -740,7 +740,7 @@ async def analyze_trufor(
 
 
 @router.post("/screening-tool", status_code=status.HTTP_201_CREATED, response_model=AnalysisResponse)
-async def save_screening_tool_analysis(
+def save_screening_tool_analysis(
     image_id: str = Form(..., description="ID of the image that was analyzed"),
     analysis_subtype: str = Form(..., description="Subtype of analysis (e.g., 'ela', 'noise_analysis', 'magnifier')"),
     parameters: str = Form("{}", description="JSON string of parameters used in the analysis"),
@@ -770,7 +770,7 @@ async def save_screening_tool_analysis(
     user_id_str = str(current_user["_id"])
     
     # Verify ownership of the image
-    await get_owned_resource(
+    get_owned_resource(
         get_images_collection,
         image_id,
         user_id_str,
@@ -813,7 +813,7 @@ async def save_screening_tool_analysis(
     if result_image:
         try:
             # Read file content
-            content = await result_image.read()
+            content = result_image.file.read()
             
             # Get output directory for this analysis
             output_dir = get_analysis_output_path(user_id_str, analysis_id, "screening_tool")

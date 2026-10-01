@@ -36,7 +36,7 @@ EXCLUDED_JOB_TYPES = ["cbir_index", "cbir_search", "cbir_delete"]
 
 
 @router.get("/stats", response_model=JobStatsResponse)
-async def get_job_stats(current_user: dict = Depends(get_current_user)):
+def get_job_stats(current_user: dict = Depends(get_current_user)):
     """
     Get job statistics for the current user.
     
@@ -119,7 +119,7 @@ async def stream_job_updates(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("", response_model=JobListResponse)
-async def list_jobs(
+def list_jobs(
     job_type: Optional[str] = Query(None, description="Filter by job type"),
     job_status: Optional[str] = Query(None, alias="status", description="Filter by status"),
     page: int = Query(1, ge=1, description="Page number"),
@@ -174,7 +174,7 @@ async def list_jobs(
 
 
 @router.get("/{job_id}", response_model=JobLogResponse)
-async def get_job(
+def get_job(
     job_id: str,
     current_user: dict = Depends(get_current_user)
 ):

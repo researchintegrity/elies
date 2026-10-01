@@ -27,7 +27,7 @@ router = APIRouter(prefix="/api", tags=["api"])
     summary="Health Check",
     description="Check if the API is running and responsive"
 )
-async def health_check():
+def health_check():
     """
     Health check endpoint to verify API is operational
     """
@@ -48,7 +48,7 @@ async def health_check():
     summary="Get Dashboard Statistics",
     description="Retrieve overall system statistics for the dashboard"
 )
-async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
+def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
     """
     Get dashboard statistics including document count, image count, and storage usage
     
@@ -103,7 +103,7 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
     summary="List User Documents",
     description="Retrieve paginated list of user's documents with optional filtering"
 )
-async def list_documents(
+def list_documents(
     current_user: dict = Depends(get_current_user),
     page: int = Query(1, ge=1, description="Page number starting from 1"),
     per_page: int = Query(10, ge=1, le=100, description="Items per page"),
@@ -181,7 +181,7 @@ async def list_documents(
     summary="Get Document Details",
     description="Retrieve detailed information about a specific document"
 )
-async def get_document_detail(
+def get_document_detail(
     document_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -199,7 +199,7 @@ async def get_document_detail(
         user_id = str(current_user.get("_id"))
         
         # Get document with ownership validation
-        document = await get_owned_resource(
+        document = get_owned_resource(
             get_documents_collection,
             document_id,
             user_id,
@@ -234,7 +234,7 @@ async def get_document_detail(
     summary="Delete Document",
     description="Delete a document and its associated images and annotations"
 )
-async def delete_document(
+def delete_document(
     document_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -257,7 +257,7 @@ async def delete_document(
         Success message with deletion statistics
     """
     try:
-        result = await delete_document_and_artifacts(
+        result = delete_document_and_artifacts(
             document_id=document_id,
             user_id=str(current_user.get("_id"))
         )
@@ -291,7 +291,7 @@ async def delete_document(
     summary="List User Images",
     description="Retrieve paginated list of user's images with optional filtering"
 )
-async def list_images(
+def list_images(
     current_user: dict = Depends(get_current_user),
     page: int = Query(1, ge=1, description="Page number starting from 1"),
     per_page: int = Query(20, ge=1, le=100, description="Items per page"),
@@ -333,7 +333,7 @@ async def list_images(
         parsed_image_type = [t.strip() for t in image_type.split(",")] if image_type else None
         
         # Use service to get images (get all to calculate pagination)
-        result = await list_images_service(
+        result = list_images_service(
             user_id=user_id,
             source_type=source_type,
             document_id=document_id,
@@ -378,7 +378,7 @@ async def list_images(
     summary="Get Image Details",
     description="Retrieve detailed information about a specific image"
 )
-async def get_image_detail(
+def get_image_detail(
     image_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -426,7 +426,7 @@ async def get_image_detail(
     summary="Delete Image",
     description="Delete a specific image"
 )
-async def delete_image(
+def delete_image(
     image_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -441,7 +441,7 @@ async def delete_image(
         Success message
     """
     try:
-        result = await delete_image_and_artifacts(
+        result = delete_image_and_artifacts(
             image_id=image_id,
             user_id=str(current_user.get("_id"))
         )
@@ -477,7 +477,7 @@ async def delete_image(
     summary="Global Search",
     description="Search across documents and images"
 )
-async def global_search(
+def global_search(
     query: str = Query(..., min_length=1, description="Search query"),
     current_user: dict = Depends(get_current_user),
     page: int = Query(1, ge=1, description="Page number starting from 1"),

@@ -30,7 +30,7 @@ class TestCBIRHealthCheck:
         mock_response.json.return_value = {"status": "healthy", "model": True, "database": True}
         mock_get.return_value = mock_response
         
-        healthy, message = check_cbir_health()
+        healthy, message = check_cbir_health(use_cache=False)
         
         assert healthy is True
         assert "healthy" in message.lower()
@@ -43,7 +43,7 @@ class TestCBIRHealthCheck:
         mock_response.json.return_value = {"status": "healthy", "model": False, "database": True}
         mock_get.return_value = mock_response
         
-        healthy, message = check_cbir_health()
+        healthy, message = check_cbir_health(use_cache=False)
         
         assert healthy is False
         assert "partially" in message.lower()
@@ -54,7 +54,7 @@ class TestCBIRHealthCheck:
         import requests
         mock_get.side_effect = requests.RequestException("Connection refused")
         
-        healthy, message = check_cbir_health()
+        healthy, message = check_cbir_health(use_cache=False)
         
         assert healthy is False
         assert "failed to connect" in message.lower()

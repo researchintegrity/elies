@@ -29,7 +29,7 @@ from app.utils.file_storage import delete_file, update_user_storage_in_db
 logger = logging.getLogger(__name__)
 
 
-async def delete_image_and_artifacts(
+def delete_image_and_artifacts(
     image_id: str,
     user_id: str
 ) -> dict:
@@ -129,7 +129,7 @@ async def delete_image_and_artifacts(
         # Cascade delete relationships involving this image
         relationships_deleted = 0
         try:
-            relationships_deleted = await remove_relationships_for_image(image_id, user_id)
+            relationships_deleted = remove_relationships_for_image(image_id, user_id)
             if relationships_deleted > 0:
                 logger.info(f"Cascade deleted {relationships_deleted} relationships for image {image_id}")
         except Exception as e:
@@ -169,7 +169,7 @@ async def delete_image_and_artifacts(
         raise
 
 
-async def list_images(
+def list_images(
     user_id: str,
     source_type: Optional[str] = None,
     document_id: Optional[str] = None,

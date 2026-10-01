@@ -16,7 +16,7 @@ router = APIRouter(prefix="/annotations/single", tags=["single-annotations"])
 
 
 @router.post("", response_model=SingleAnnotationResponse, status_code=status.HTTP_201_CREATED)
-async def create_single_annotation(
+def create_single_annotation(
     annotation_data: SingleAnnotationCreate,
     current_user: dict = Depends(get_current_user)
 ):
@@ -37,7 +37,7 @@ async def create_single_annotation(
     user_id_str = str(current_user["_id"])
     
     # Verify image exists and belongs to user
-    await get_owned_resource(
+    get_owned_resource(
         get_images_collection,
         annotation_data.image_id,
         user_id_str,
@@ -64,7 +64,7 @@ async def create_single_annotation(
 
 
 @router.get("", response_model=List[SingleAnnotationResponse])
-async def list_single_annotations(
+def list_single_annotations(
     image_id: str = Query(..., description="Image ID to get annotations for"),
     current_user: dict = Depends(get_current_user),
     limit: int = 100,
@@ -109,7 +109,7 @@ async def list_single_annotations(
 
 
 @router.get("/{annotation_id}", response_model=SingleAnnotationResponse)
-async def get_single_annotation(
+def get_single_annotation(
     annotation_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -129,7 +129,7 @@ async def get_single_annotation(
     """
     user_id_str = str(current_user["_id"])
     
-    annotation = await get_owned_resource(
+    annotation = get_owned_resource(
         get_single_annotations_collection,
         annotation_id,
         user_id_str,
@@ -141,7 +141,7 @@ async def get_single_annotation(
 
 
 @router.delete("/{annotation_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_single_annotation(
+def delete_single_annotation(
     annotation_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -159,7 +159,7 @@ async def delete_single_annotation(
     user_id_str = str(current_user["_id"])
     
     # Verify annotation exists and belongs to user
-    await get_owned_resource(
+    get_owned_resource(
         get_single_annotations_collection,
         annotation_id,
         user_id_str,

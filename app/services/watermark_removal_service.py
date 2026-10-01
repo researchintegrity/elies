@@ -15,7 +15,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-async def initiate_watermark_removal(
+def initiate_watermark_removal(
     document_id: str,
     user_id: str,
     aggressiveness_mode: int = 2
@@ -119,7 +119,7 @@ async def initiate_watermark_removal(
     }
 
 
-async def get_watermark_removal_status(
+def get_watermark_removal_status(
     document_id: str,
     user_id: str
 ) -> Dict:

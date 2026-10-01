@@ -12,7 +12,6 @@ from app.services.job_logger import create_job_log, update_job_progress, complet
 from app.config.settings import CELERY_MAX_RETRIES
 from bson import ObjectId
 from datetime import datetime
-import asyncio
 import logging
 
 logger = logging.getLogger(__name__)
@@ -49,43 +48,27 @@ def _create_relationships_from_provenance(user_id: str, query_image_id: str, res
             logger.info(f"No edges found in provenance result for analysis {analysis_id}")
             return 0
         
-        if edges:
-            async def process_edges():
-                tasks = []
-                for edge in edges:
-                    # Handle different field name conventions
-                    source_id = edge.get('from') or edge.get('source') or edge.get('image1_id')
-                    target_id = edge.get('to') or edge.get('target') or edge.get('image2_id')
-                    weight = edge.get('weight', 1.0)
-                    
-                    if source_id and target_id and source_id != target_id:
-                        tasks.append(
-                            create_relationship(
-                                user_id=user_id,
-                                image1_id=source_id,
-                                image2_id=target_id,
-                                source_type='provenance',
-                                weight=weight,
-                                metadata={'analysis_id': analysis_id}
-                            )
-                        )
-                
-                # Execute all creations concurrently
-                if tasks:
-                    results = await asyncio.gather(*tasks, return_exceptions=True)
-                    # Count successes
-                    return sum(1 for r in results if not isinstance(r, Exception))
-                return 0
-
+        created_count = 0
+        for edge in edges:
+            # Handle different field name conventions
+            source_id = edge.get('from') or edge.get('source') or edge.get('image1_id')
+            target_id = edge.get('to') or edge.get('target') or edge.get('image2_id')
+            weight = edge.get('weight', 1.0)
+            if not source_id or not target_id or source_id == target_id:
+                continue
             try:
-                # Use asyncio.run to execute the async function in this synchronous context
-                created_count = asyncio.run(process_edges())
-                logger.info(f"Created {created_count} relationships from provenance analysis {analysis_id}")
+                create_relationship(
+                    user_id=user_id,
+                    image1_id=source_id,
+                    image2_id=target_id,
+                    source_type='provenance',
+                    weight=weight,
+                    metadata={'analysis_id': analysis_id}
+                )
+                created_count += 1
             except Exception as e:
-                logger.error(f"Failed to execute async relationship creation: {e}")
-        else:
-             logger.info(f"No edges to process for analysis {analysis_id}")
-        
+                logger.warning(f"Could not create relationship {source_id}-{target_id}: {e}")
+
         logger.info(f"Created {created_count} relationships from provenance analysis {analysis_id}")
         return created_count
     except Exception as e:

@@ -42,7 +42,7 @@ router = APIRouter(prefix="/admin", tags=["Admin"])
 # ============================================================================
 
 @router.get("/users", response_model=AdminUserListResponse)
-async def list_users(
+def list_users(
     page: int = Query(1, ge=1, description="Page number (starts at 1)"),
     page_size: int = Query(20, ge=1, le=100, description="Number of users per page"),
     search: Optional[str] = Query(None, description="Search by username or email"),
@@ -108,7 +108,7 @@ async def list_users(
 
 
 @router.get("/users/{user_id}", response_model=AdminUserResponse)
-async def get_user(
+def get_user(
     user_id: str,
     current_admin: dict = Depends(get_current_admin_user)
 ) -> dict:
@@ -151,7 +151,7 @@ async def get_user(
 # ============================================================================
 
 @router.patch("/users/{user_id}/quota", response_model=AdminUserResponse)
-async def update_user_quota(
+def update_user_quota(
     user_id: str,
     quota_update: AdminUpdateQuotaRequest,
     current_admin: dict = Depends(get_current_admin_user)
@@ -215,7 +215,7 @@ async def update_user_quota(
 # ============================================================================
 
 @router.patch("/users/{user_id}/role", response_model=AdminUserResponse)
-async def update_user_role(
+def update_user_role(
     user_id: str,
     role_update: AdminUpdateRoleRequest,
     current_admin: dict = Depends(get_current_admin_user)
@@ -284,7 +284,7 @@ async def update_user_role(
 # ============================================================================
 
 @router.post("/users/{user_id}/reset-password", response_model=AdminResetPasswordResponse)
-async def reset_user_password(
+def reset_user_password(
     user_id: str,
     password_request: AdminResetPasswordRequest = None,
     current_admin: dict = Depends(get_current_admin_user)
@@ -369,7 +369,7 @@ async def reset_user_password(
 # ============================================================================
 
 @router.patch("/users/{user_id}/status", response_model=AdminUserResponse)
-async def update_user_status(
+def update_user_status(
     user_id: str,
     status_update: AdminUpdateUserStatusRequest,
     current_admin: dict = Depends(get_current_admin_user)
@@ -439,7 +439,7 @@ async def update_user_status(
 # ============================================================================
 
 @router.get("/stats")
-async def get_admin_stats(
+def get_admin_stats(
     current_admin: dict = Depends(get_current_admin_user)
 ) -> dict:
     """

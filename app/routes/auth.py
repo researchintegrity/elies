@@ -21,7 +21,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
 @router.post("/register", response_model=TokenResponse)
-async def register(user_data: UserRegister) -> dict:
+def register(user_data: UserRegister) -> dict:
     """
     Register a new user
     
@@ -83,7 +83,7 @@ async def register(user_data: UserRegister) -> dict:
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(form_data: OAuth2PasswordRequestForm = Depends()) -> dict:
+def login(form_data: OAuth2PasswordRequestForm = Depends()) -> dict:
     """
     Login with username and password
     

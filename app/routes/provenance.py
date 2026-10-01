@@ -53,7 +53,7 @@ def provenance_health():
 
 
 @router.post("/analyze", status_code=status.HTTP_202_ACCEPTED)
-async def analyze_provenance(
+def analyze_provenance(
     request: ProvenanceRequest,
     current_user: dict = Depends(get_current_user)
 ):

@@ -118,7 +118,7 @@ async def shutdown_event():
 # ROOT & HEALTH ENDPOINTS
 # ============================================================================
 @app.get("/", tags=["General"])
-async def root() -> dict:
+def root() -> dict:
     """
     Root endpoint - API information
     
@@ -141,7 +141,7 @@ async def root() -> dict:
 
 
 @app.get("/health", tags=["General"])
-async def health_check() -> dict:
+def health_check() -> dict:
     """
     Health check endpoint
     

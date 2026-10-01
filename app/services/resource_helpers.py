@@ -11,7 +11,7 @@ from bson import ObjectId
 from app.exceptions import ResourceNotFoundError, ValidationError
 
 
-async def get_owned_resource(
+def get_owned_resource(
     collection_getter: Callable,
     resource_id: str,
     user_id: str,
@@ -59,7 +59,7 @@ async def get_owned_resource(
     return resource
 
 
-async def get_resource_by_id(
+def get_resource_by_id(
     collection_getter: Callable,
     resource_id: str,
     resource_name: str = "Resource"

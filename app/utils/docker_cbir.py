@@ -5,10 +5,13 @@ This module provides functions to interact with the CBIR microservice
 for image similarity search and indexing.
 """
 import logging
+import time
+
 import requests
 from typing import Tuple, Dict, List, Optional, Any
 from app.config.settings import (
     convert_host_path_to_container,
+    CBIR_HEALTH_CACHE_SECONDS,
     CBIR_SERVICE_URL,
     CBIR_TIMEOUT,
 )
@@ -26,13 +29,26 @@ def _convert_cbir_path_to_response(cbir_path: str, user_id: str) -> str:
     return cbir_path
 
 
-def check_cbir_health() -> Tuple[bool, str]:
+# Cache health results briefly: uploads check health on every request
+_HEALTH_CACHE_TTL_OK = CBIR_HEALTH_CACHE_SECONDS
+_HEALTH_CACHE_TTL_FAILED = min(5, CBIR_HEALTH_CACHE_SECONDS)
+_health_cache: Dict[str, Any] = {"expires": 0.0, "value": None}
+
+
+def check_cbir_health(use_cache: bool = True) -> Tuple[bool, str]:
     """
     Check if the CBIR service is healthy.
-    
+
+    Results are cached for CBIR_HEALTH_CACHE_SECONDS (failures for at most 5s)
+    so that request handlers don't make a blocking HTTP call every time.
+
     Returns:
         Tuple (healthy, message)
     """
+    now = time.monotonic()
+    if use_cache and _health_cache["value"] is not None and now < _health_cache["expires"]:
+        return _health_cache["value"]
+
     try:
         response = requests.get(
             f"{CBIR_SERVICE_URL}/health",
@@ -41,11 +57,17 @@ def check_cbir_health() -> Tuple[bool, str]:
         if response.status_code == 200:
             data = response.json()
             if data.get("model") and data.get("database"):
-                return True, "CBIR service is healthy"
-            return False, f"CBIR service partially initialized: {data}"
-        return False, f"CBIR service returned status {response.status_code}"
-    except requests.RequestException as e:
-        return False, f"Failed to connect to CBIR service: {str(e)}"
+                result = (True, "CBIR service is healthy")
+            else:
+                result = (False, f"CBIR service partially initialized: {data}")
+        else:
+            result = (False, f"CBIR service returned status {response.status_code}")
+    except (requests.RequestException, ValueError) as e:
+        result = (False, f"Failed to connect to CBIR service: {str(e)}")
+
+    ttl = _HEALTH_CACHE_TTL_OK if result[0] else _HEALTH_CACHE_TTL_FAILED
+    _health_cache.update(expires=now + ttl, value=result)
+    return result
 
 
 def index_image(

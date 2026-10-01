@@ -121,7 +121,7 @@ def upload_document(
 
 
 @router.get("", response_model=PaginatedDocumentResponse)
-async def list_documents(
+def list_documents(
     current_user: dict = Depends(get_current_user),
     page: int = Query(1, ge=1),
     per_page: int = Query(12, ge=1, le=24)
@@ -180,7 +180,7 @@ async def list_documents(
 
 
 @router.get("/{doc_id}")
-async def get_document(
+def get_document(
     doc_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -198,7 +198,7 @@ async def get_document(
     user_quota = current_user.get("storage_limit_bytes", DEFAULT_USER_STORAGE_QUOTA)
     
     # Get document with ownership validation
-    doc = await get_owned_resource(
+    doc = get_owned_resource(
         get_documents_collection,
         doc_id,
         user_id_str,
@@ -224,7 +224,7 @@ async def get_document(
 
 
 @router.get("/{doc_id}/images", response_model=List[ImageResponse])
-async def get_document_images(
+def get_document_images(
     doc_id: str,
     current_user: dict = Depends(get_current_user),
     limit: int = 50,
@@ -245,7 +245,7 @@ async def get_document_images(
     user_id_str = str(current_user["_id"])
     
     # Verify document belongs to user
-    await get_owned_resource(
+    get_owned_resource(
         get_documents_collection,
         doc_id,
         user_id_str,
@@ -275,7 +275,7 @@ async def get_document_images(
 
 
 @router.get("/{doc_id}/download")
-async def download_document(
+def download_document(
     doc_id: str,
     current_user: dict = Depends(get_current_user_media)
 ):
@@ -292,7 +292,7 @@ async def download_document(
     user_id_str = str(current_user["_id"])
     
     # Verify document belongs to user
-    doc = await get_owned_resource(
+    doc = get_owned_resource(
         get_documents_collection,
         doc_id,
         user_id_str,
@@ -316,7 +316,7 @@ async def download_document(
 
 
 @router.delete("/{doc_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_document(
+def delete_document(
     doc_id: str,
     current_user: dict = Depends(get_current_user)
 ) -> None:
@@ -334,7 +334,7 @@ async def delete_document(
         ResourceNotFoundError: If document not found.
         FileOperationError: If file deletion fails.
     """
-    await delete_document_and_artifacts(
+    delete_document_and_artifacts(
         document_id=doc_id,
         user_id=str(current_user["_id"])
     )
@@ -345,7 +345,7 @@ async def delete_document(
 # ============================================================================
 
 @router.get("/tasks/{task_id}", tags=["documents"])
-async def get_task_status(
+def get_task_status(
     task_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -405,7 +405,7 @@ async def get_task_status(
     status_code=status.HTTP_202_ACCEPTED,
     tags=["documents"]
 )
-async def initiate_watermark_removal_endpoint(
+def initiate_watermark_removal_endpoint(
     doc_id: str,
     request: WatermarkRemovalRequest,
     current_user: dict = Depends(get_current_user)
@@ -434,7 +434,7 @@ async def initiate_watermark_removal_endpoint(
     try:
         user_id_str = str(current_user["_id"])
         
-        result = await initiate_watermark_removal(
+        result = initiate_watermark_removal(
             document_id=doc_id,
             user_id=user_id_str,
             aggressiveness_mode=request.aggressiveness_mode
@@ -482,7 +482,7 @@ async def initiate_watermark_removal_endpoint(
     response_model=WatermarkRemovalStatusResponse,
     tags=["documents"]
 )
-async def get_watermark_removal_status_endpoint(
+def get_watermark_removal_status_endpoint(
     doc_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -517,7 +517,7 @@ async def get_watermark_removal_status_endpoint(
     try:
         user_id_str = str(current_user["_id"])
         
-        status_info = await get_watermark_removal_status(
+        status_info = get_watermark_removal_status(
             document_id=doc_id,
             user_id=user_id_str
         )
