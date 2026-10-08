@@ -75,6 +75,8 @@ class ContainerRun:
     def describe_failure(self, limit: int = 2000) -> str:
         if self.timed_out:
             return f"timed out after {self.duration:.0f}s"
+        if self.returncode == 137:  # SIGKILL: the kernel's OOM killer when a memory limit is set
+            return "killed (exit code 137), most likely out of memory: raise DOCKER_TOOL_MEMORY"
         detail = (self.stderr or self.stdout).strip()[-limit:]
         return f"exit code {self.returncode}" + (f": {detail}" if detail else "")
 

@@ -24,6 +24,7 @@ from app.utils.file_storage import get_analysis_output_path
 logger = logging.getLogger(__name__)
 
 STATUS_PREFIX = "[STATUS]"
+ERROR_PREFIX = "[ERROR]"
 
 
 def run_forgeryscope_with_docker(
@@ -91,6 +92,10 @@ def run_forgeryscope_with_docker(
     if not run.ok:
         if "Unknown runtime specified nvidia" in run.stderr:
             return False, "GPU runtime not available. Set FORGERYSCOPE_USE_GPU=false or install the NVIDIA runtime.", {}
+        # The tool's own one-line error rather than its traceback (the runner logs the whole output)
+        errors = [line[len(ERROR_PREFIX):].strip() for line in run.stderr.splitlines() if line.startswith(ERROR_PREFIX)]
+        if errors and not run.timed_out:
+            return False, errors[-1], {}
         return False, f"Detection failed ({run.describe_failure()})", {}
 
     try:

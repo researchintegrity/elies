@@ -24,8 +24,9 @@ PANELS = [{"id": 3, "label": "Blots", "confidence": 0.93, "bbox": [305.9, 1321.8
 class FakeForgeryscope:
     """Stands in for run_tool_container and writes what the tool would write."""
 
-    def __init__(self, verdict="duplicated", images=True, report=True, returncode=0, stdout_lines=()):
+    def __init__(self, verdict="duplicated", images=True, report=True, returncode=0, stdout_lines=(), stderr="boom"):
         self.verdict = verdict
+        self.stderr = stderr
         self.images = images
         self.report = report
         self.returncode = returncode
@@ -49,7 +50,7 @@ class FakeForgeryscope:
                 {"verdict": self.verdict, "detections": detections, "panels": PANELS, "outputs": outputs}))
         for line in self.stdout_lines:
             on_stdout_line(line)
-        return ContainerRun("elies-fake", self.returncode, "", "boom" if self.returncode else "", False, 0.1)
+        return ContainerRun("elies-fake", self.returncode, "", self.stderr if self.returncode else "", False, 0.1)
 
 
 @pytest.fixture
@@ -99,6 +100,8 @@ def test_authentic_figure_has_no_images(monkeypatch, image_file):
 
 @pytest.mark.parametrize("fake, error", [
     (FakeForgeryscope(returncode=2), "Detection failed (exit code 2: boom)"),
+    (FakeForgeryscope(returncode=1, stderr="Traceback (most recent call last):\n  ...\n[ERROR] Image too large: 9x9 pixels"),
+     "Image too large: 9x9 pixels"),
     (FakeForgeryscope(report=False), "report is missing"),
     (FakeForgeryscope(images=False), "result images are missing"),
 ])
@@ -107,7 +110,7 @@ def test_failures(monkeypatch, image_file, fake, error):
 
     ok, message, results = _detect(image_file)
 
-    assert not ok and error in message and results == {}
+    assert not ok and error in message and "Traceback" not in message and results == {}
 
 
 def test_gpu(monkeypatch, image_file):

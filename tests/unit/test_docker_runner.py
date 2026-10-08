@@ -118,6 +118,12 @@ def test_tool_failure_is_reported(fake_docker, monkeypatch):
     assert "tool crashed" in result.describe_failure()
 
 
+def test_killed_tool_is_reported_as_out_of_memory():
+    run = docker_runner.ContainerRun(name="t", returncode=137, stdout="", stderr="Creating settings file",
+                                     timed_out=False, duration=6.0)
+    assert "out of memory" in run.describe_failure() and "DOCKER_TOOL_MEMORY" in run.describe_failure()
+
+
 def test_orphans_of_gone_workers_are_killed(fake_docker, monkeypatch):
     live_worker, gone_worker = "b" * 12, "a" * 12
     monkeypatch.setenv("FAKE_DOCKER_TOOLS", "\n".join([
