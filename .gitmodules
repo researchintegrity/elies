@@ -25,3 +25,6 @@
 [submodule "system_modules/elies-frontend"]
 	path = system_modules/elies-frontend
 	url = https://github.com/researchintegrity/elies-frontend.git
+[submodule "system_modules/forgeryscope"]
+	path = system_modules/forgeryscope
+	url = https://github.com/researchintegrity/forgeryscope.git

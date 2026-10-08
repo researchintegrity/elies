@@ -1,220 +1,99 @@
 """
-Docker-based TruFor Detection using trufor container
+Docker-based TruFor Detection using the trufor container
 """
-import subprocess
-import os
 import logging
+import os
 from pathlib import Path
-from typing import Tuple, Dict, Optional, Callable
+from typing import Callable, Dict, Optional, Tuple
+
 from app.config.settings import (
-    is_container_path,
-    convert_container_path_to_host,
-    convert_host_path_to_container,
     TRUFOR_DOCKER_IMAGE,
     TRUFOR_TIMEOUT,
     TRUFOR_USE_GPU,
-    HOST_WORKSPACE_PATH
+    convert_host_path_to_container,
 )
-from app.utils.file_storage import get_analysis_output_path
 from app.schemas import AnalysisType
+from app.utils.docker_runner import Mount, run_tool_container
+from app.utils.file_storage import get_analysis_output_path
 
 logger = logging.getLogger(__name__)
 
-# Path to the local run_trufor.py script that will be mounted into the container
-# This allows patching the container without rebuilding the image
-TRUFOR_SCRIPT_PATH = Path(__file__).parent.parent.parent / "system_modules" / "TruFor" / "docker" / "src" / "run_trufor.py"
+STATUS_PREFIX = "[STATUS]"
 
 
 def run_trufor_detection_with_docker(
     analysis_id: str,
     user_id: str,
     image_path: str,
-    docker_image: str = None,
+    docker_image: str | None = None,
     save_noiseprint: bool = False,
     status_callback: Optional[Callable[[str], None]] = None
 ) -> Tuple[bool, str, Dict]:
     """Run TruFor detection on an image using Docker.
 
-    Args:
-        analysis_id: ID of the analysis
-        user_id: ID of the user
-        image_path: Absolute path to the source image file
-        docker_image: Optional custom docker image name
-        save_noiseprint: Whether to save the noiseprint map (default: False)
-        status_callback: Optional function to call with status updates (str)
+    The tool prints ``[STATUS] ...`` lines while it works; they are forwarded
+    to ``status_callback`` as they arrive. The container is killed if it runs
+    longer than TRUFOR_TIMEOUT (plus a short grace period).
 
     Returns:
-        Tuple (success, message, results)
-        results is a dict containing paths to the generated images
+        Tuple (success, message, results) with container paths of
+        'pred_map', 'conf_map' and optionally 'noiseprint'.
+
+    Raises:
+        DockerUnavailableError: Docker could not be reached (transient).
     """
-    results = {}
-    
-    if docker_image is None:
-        docker_image = TRUFOR_DOCKER_IMAGE
+    results: Dict = {}
+    docker_image = docker_image or TRUFOR_DOCKER_IMAGE
 
     if not os.path.exists(image_path):
-        # Try to resolve path using centralized utility
         return False, f"Source image file not found: {image_path}", results
-    
-    # Ensure absolute path
+
     image_path = os.path.abspath(image_path)
-
-    # Setup paths
-    image_dir = os.path.dirname(image_path)
     image_filename = os.path.basename(image_path)
-    
-    # Get dedicated output directory
     try:
-        output_dir_relative = get_analysis_output_path(user_id, analysis_id, AnalysisType.TRUFOR)
-        output_dir_path = os.path.abspath(output_dir_relative)
-    except Exception as e:
-        return False, f"Failed to create output directory: {str(e)}", results
+        output_dir = os.path.abspath(get_analysis_output_path(user_id, analysis_id, AnalysisType.TRUFOR))
+    except OSError as e:
+        return False, f"Failed to create output directory: {e}", results
 
-    # Handle Docker path conversion (Host vs Container)
-    host_image_dir = image_dir
-    host_output_dir = output_dir_path
-    
-    # Check if we are running in a container environment by checking if paths start with /workspace
-    # OR if HOST_WORKSPACE_PATH env var is set (which implies we might need conversion)
-    is_container_env = is_container_path(Path(image_dir))
-    if is_container_env:
-        logger.info(f"Detected container environment. Converting paths for host Docker daemon")
-        
-        if not str(HOST_WORKSPACE_PATH):
-            return False, "HOST_WORKSPACE_PATH environment variable not set", results
-        
-        # Convert input path: container path to host path
-        if is_container_path(Path(image_dir)):
-            host_image_dir = str(convert_container_path_to_host(Path(image_dir)))
-        
-        # Convert output path: container path to host path
-        if is_container_path(Path(output_dir_path)):
-            host_output_dir = str(convert_container_path_to_host(Path(output_dir_path)))
-
-    # Construct Docker command
-    container_input_path = f"/data/{image_filename}"
-    container_output_path = "/data_out"
-    
-    cmd = ["docker", "run", "--rm"]
-    
-    if TRUFOR_USE_GPU:
-        cmd.extend(["--runtime=nvidia", "--gpus", "all"])
-    
-    # Mount volumes for input/output data
-    cmd.extend([
-        "-v", f"{host_image_dir}:/data",
-        "-v", f"{host_output_dir}:/data_out",
-    ])
-    
-    # Mount the local run_trufor.py script to patch the container without rebuilding
-    # This allows new features (like --save-noiseprint) to work without image rebuild
-    if TRUFOR_SCRIPT_PATH.exists():
-        host_script_path = str(TRUFOR_SCRIPT_PATH.resolve())
-        # If running in container, convert to host path
-        if is_container_env and is_container_path(TRUFOR_SCRIPT_PATH):
-            host_script_path = str(convert_container_path_to_host(TRUFOR_SCRIPT_PATH))
-        cmd.extend(["-v", f"{host_script_path}:/run_trufor.py:ro"])
-        logger.info(f"Mounting local TruFor script: {host_script_path}")
-    else:
-        logger.warning(f"Local TruFor script not found at {TRUFOR_SCRIPT_PATH}, using container's built-in script")
-    
-    cmd.append(docker_image)
-    
-    if TRUFOR_USE_GPU:
-        cmd.extend(["-gpu", "0"])
-    else:
-        cmd.extend(["-gpu", "-1"])
-        
-    cmd.extend([
-        "-in", container_input_path,
-        "-out", container_output_path,
-        "--timeout", str(TRUFOR_TIMEOUT)
-    ])
-    
-    # Add save-noiseprint flag if requested
+    args = ["-gpu", "0" if TRUFOR_USE_GPU else "-1",
+            "-in", f"/data/{image_filename}", "-out", "/data_out", "--timeout", str(TRUFOR_TIMEOUT)]
     if save_noiseprint:
-        cmd.append("--save-noiseprint")
+        args.append("--save-noiseprint")
 
-    logger.info(f"Running TruFor detection: {' '.join(cmd)}")
+    def forward_status(line: str) -> None:
+        line = line.strip()
+        if line.startswith(STATUS_PREFIX) and status_callback:
+            status_callback(line[len(STATUS_PREFIX):].strip())
 
-    try:
-        # Use Popen to capture output in real-time
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            universal_newlines=True
-        )
-        
-        # Read stdout for status updates
-        stdout_lines = []
-        while True:
-            line = process.stdout.readline()
-            if not line and process.poll() is not None:
-                break
-            if line:
-                stdout_lines.append(line)
-                line = line.strip()
-                if line.startswith("[STATUS]"):
-                    status_msg = line.replace("[STATUS]", "").strip()
-                    logger.info(f"TruFor Status: {status_msg}")
-                    if status_callback:
-                        status_callback(status_msg)
-        
-        # Get remaining output and stderr
-        stdout_rest, stderr = process.communicate()
-        if stdout_rest:
-            stdout_lines.append(stdout_rest)
-            
-        if process.returncode != 0:
-            logger.error(f"Docker command failed: {stderr}")
-            if "Unknown runtime specified nvidia" in stderr:
-                 return False, "GPU runtime not available. TruFor requires NVIDIA GPU.", results
-            return False, f"Detection failed: {stderr}", results
+    run = run_tool_container(
+        docker_image,
+        args,
+        mounts=[Mount(os.path.dirname(image_path), "/data"), Mount(output_dir, "/data_out", read_only=False)],
+        timeout=TRUFOR_TIMEOUT + 60,
+        gpu=TRUFOR_USE_GPU,
+        purpose="trufor",
+        on_stdout_line=forward_status,
+    )
+    if not run.ok:
+        if "Unknown runtime specified nvidia" in run.stderr:
+            return False, "GPU runtime not available. Set TRUFOR_USE_GPU=false or install the NVIDIA runtime.", results
+        return False, f"Detection failed ({run.describe_failure()})", results
 
-        # Check output
-        # We expect {basename}_pred_map.png, {basename}_conf_map.png, and optionally {basename}_noiseprint.png
-        basename = os.path.splitext(image_filename)[0]
-        pred_map_filename = f"{basename}_pred_map.png"
-        conf_map_filename = f"{basename}_conf_map.png"
-        noiseprint_filename = f"{basename}_noiseprint.png"
-        pred_map_path = os.path.join(output_dir_path, pred_map_filename)
-        conf_map_path = os.path.join(output_dir_path, conf_map_filename)
-        noiseprint_path = os.path.join(output_dir_path, noiseprint_filename)
-        
-        pred_map_exists = os.path.exists(pred_map_path)
-        conf_map_exists = os.path.exists(conf_map_path)
-        noiseprint_exists = os.path.exists(noiseprint_path)
-        
-        if pred_map_exists and conf_map_exists:
-            results['pred_map'] = str(convert_host_path_to_container(Path(pred_map_path)))
-            results['conf_map'] = str(convert_host_path_to_container(Path(conf_map_path)))
-            # Include noiseprint if it was saved
-            if noiseprint_exists:
-                results['noiseprint'] = str(convert_host_path_to_container(Path(noiseprint_path)))
-            return True, "Analysis completed successfully", results
-        elif pred_map_exists or conf_map_exists:
-            # Partial results - store whatever we found
-            if pred_map_exists:
-                results['pred_map'] = str(convert_host_path_to_container(Path(pred_map_path)))
-            if conf_map_exists:
-                results['conf_map'] = str(convert_host_path_to_container(Path(conf_map_path)))
-            if noiseprint_exists:
-                results['noiseprint'] = str(convert_host_path_to_container(Path(noiseprint_path)))
-            logger.warning(f"Partial TruFor output: pred_map={pred_map_exists}, conf_map={conf_map_exists}, noiseprint={noiseprint_exists}")
-            return True, "Analysis completed with partial results", results
-        else:
-            # Check if any file was created (fallback for different naming)
-            files = os.listdir(output_dir_path)
-            if files:
-                logger.warning(f"Expected {pred_map_filename} and {conf_map_filename} but found {files}")
-                results['files'] = [str(convert_host_path_to_container(Path(os.path.join(output_dir_path, f)))) for f in files]
-                return True, "Analysis completed (filename mismatch?)", results
-            
-            return False, "Analysis completed but no output file found.", results
+    basename = os.path.splitext(image_filename)[0]
+    for key in ("pred_map", "conf_map", "noiseprint"):
+        path = os.path.join(output_dir, f"{basename}_{key}.png")
+        if os.path.exists(path):
+            results[key] = str(convert_host_path_to_container(Path(path)))
 
-    except Exception as e:
-        logger.exception("Unexpected error during TruFor detection")
-        return False, f"System error: {str(e)}", results
+    if "pred_map" in results and "conf_map" in results:
+        return True, "Analysis completed successfully", results
+    if results:
+        logger.warning("Partial TruFor output for %s: %s", analysis_id, sorted(results))
+        return True, "Analysis completed with partial results", results
+
+    files = os.listdir(output_dir)
+    if files:
+        logger.warning("TruFor output names did not match the expected pattern: %s", files)
+        results["files"] = [str(convert_host_path_to_container(Path(output_dir) / f)) for f in files]
+        return True, "Analysis completed (filename mismatch?)", results
+    return False, "Analysis completed but no output file found.", results

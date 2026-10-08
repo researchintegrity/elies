@@ -5,10 +5,12 @@ Provides endpoints for image similarity search and indexing.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
 from typing import Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from bson import ObjectId
 from bson.errors import InvalidId
 
+from app.config.storage_quota import MAX_IMAGE_FILE_SIZE, format_bytes
+from app.exceptions import ValidationError
 from app.utils.security import get_current_user
 from app.db.mongodb import get_images_collection, get_analyses_collection
 from app.schemas import (
@@ -31,6 +33,7 @@ from app.tasks.cbir import (
     cbir_delete_image,
     cbir_delete_user_data,
 )
+from app.services.task_submission import submit_task
 from app.services.cbir_service import (
     get_user_images_for_indexing,
     search_similar_by_image_id,
@@ -45,7 +48,7 @@ router = APIRouter(
 
 
 @router.get("/health", response_model=CBIRStatusResponse)
-async def cbir_health():
+def cbir_health():
     """
     Check CBIR service health status.
     
@@ -56,7 +59,7 @@ async def cbir_health():
 
 
 @router.post("/index", status_code=status.HTTP_202_ACCEPTED)
-async def index_images(
+def index_images(
     request: CBIRIndexRequest = None,
     current_user: dict = Depends(get_current_user)
 ):
@@ -141,7 +144,7 @@ async def index_images(
 
 
 @router.post("/search", status_code=status.HTTP_202_ACCEPTED)
-async def search_similar(
+def search_similar(
     request: CBIRSearchRequest,
     current_user: dict = Depends(get_current_user)
 ):
@@ -162,7 +165,7 @@ async def search_similar(
         })
     except InvalidId:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Invalid image ID format"
         )
     
@@ -179,8 +182,8 @@ async def search_similar(
         "user_id": user_id,
         "source_image_id": request.image_id,
         "status": AnalysisStatus.PENDING,
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow(),
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc),
         "parameters": {
             "top_k": request.top_k,
             "labels": request.labels
@@ -196,14 +199,14 @@ async def search_similar(
     )
     
     # Trigger async search
-    cbir_search.delay(
+    submit_task(cbir_search, dict(
         analysis_id=analysis_id,
         user_id=user_id,
         query_image_id=request.image_id,
         query_image_path=query_image["file_path"],
         top_k=request.top_k,
         labels=request.labels
-    )
+    ), owner_id=user_id, analysis_id=analysis_id)
     
     return {
         "message": "CBIR search started",
@@ -214,7 +217,7 @@ async def search_similar(
 
 
 @router.post("/search/sync", response_model=CBIRSearchResponse)
-async def search_similar_sync(
+def search_similar_sync(
     request: CBIRSearchRequest,
     current_user: dict = Depends(get_current_user)
 ):
@@ -235,7 +238,7 @@ async def search_similar_sync(
         })
     except InvalidId:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
             detail="Invalid image ID format"
         )
     
@@ -272,10 +275,10 @@ async def search_similar_sync(
 
 
 @router.post("/search/upload", response_model=CBIRSearchResponse)
-async def search_by_upload(
+def search_by_upload(
     file: UploadFile = File(...),
     top_k: int = Query(10, ge=1, le=100),
-    labels: Optional[List[str]] = Query(None),
+    labels: Optional[List[str]] = Query(None, max_length=50),
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -285,8 +288,12 @@ async def search_by_upload(
     """
     user_id = str(current_user["_id"])
     
-    # Read uploaded file
-    image_data = await file.read()
+    # Read the query image, refusing anything over the image size limit
+    image_data = file.file.read(MAX_IMAGE_FILE_SIZE + 1)
+    if not image_data:
+        raise ValidationError("File is empty.")
+    if len(image_data) > MAX_IMAGE_FILE_SIZE:
+        raise ValidationError(f"File too large. Maximum size is {format_bytes(MAX_IMAGE_FILE_SIZE)}.")
     
     # Perform search via upload endpoint
     success, message, results = search_similar_images_upload(
@@ -316,7 +323,7 @@ async def search_by_upload(
 
 
 @router.delete("/index", status_code=status.HTTP_202_ACCEPTED)
-async def delete_from_index(
+def delete_from_index(
     request: CBIRDeleteRequest,
     current_user: dict = Depends(get_current_user)
 ):
@@ -356,7 +363,7 @@ async def delete_from_index(
 
 
 @router.delete("/index/all", status_code=status.HTTP_202_ACCEPTED)
-async def delete_all_from_index(
+def delete_all_from_index(
     current_user: dict = Depends(get_current_user)
 ):
     """

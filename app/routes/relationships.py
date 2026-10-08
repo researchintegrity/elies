@@ -29,7 +29,7 @@ router = APIRouter(
     status_code=status.HTTP_201_CREATED,
     summary="Create a relationship between two images"
 )
-async def create_relationship(
+def create_relationship(
     request: ImageRelationshipCreate,
     current_user: dict = Depends(get_current_user)
 ):
@@ -83,7 +83,7 @@ async def create_relationship(
         )
     
     try:
-        relationship = await relationship_service.create_relationship(
+        relationship = relationship_service.create_relationship(
             user_id=user_id,
             image1_id=request.image1_id,
             image2_id=request.image2_id,
@@ -106,7 +106,7 @@ async def create_relationship(
     response_model=MessageResponse,
     summary="Remove a relationship"
 )
-async def remove_relationship(
+def remove_relationship(
     relationship_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -125,7 +125,7 @@ async def remove_relationship(
             detail="Invalid relationship ID format"
         )
     
-    deleted = await relationship_service.remove_relationship(
+    deleted = relationship_service.remove_relationship(
         relationship_id=relationship_id,
         user_id=user_id
     )
@@ -144,7 +144,7 @@ async def remove_relationship(
     response_model=List[ImageRelationshipResponse],
     summary="Get all relationships for an image"
 )
-async def get_relationships_for_image(
+def get_relationships_for_image(
     image_id: str,
     include_details: bool = Query(True, description="Include other image details"),
     current_user: dict = Depends(get_current_user)
@@ -176,7 +176,7 @@ async def get_relationships_for_image(
             detail="Image not found"
         )
     
-    relationships = await relationship_service.get_relationships_for_image(
+    relationships = relationship_service.get_relationships_for_image(
         image_id=image_id,
         user_id=user_id,
         include_image_details=include_details
@@ -190,7 +190,7 @@ async def get_relationships_for_image(
     response_model=RelationshipGraphResponse,
     summary="Get relationship graph for visualization"
 )
-async def get_relationship_graph(
+def get_relationship_graph(
     image_id: str,
     max_depth: int = Query(5, ge=0, description="Maximum exploration depth (0 = unlimited)"),
     current_user: dict = Depends(get_current_user)
@@ -226,7 +226,7 @@ async def get_relationship_graph(
             detail="Image not found"
         )
     
-    graph_data = await relationship_service.get_relationship_graph(
+    graph_data = relationship_service.get_relationship_graph(
         image_id=image_id,
         user_id=user_id,
         max_depth=max_depth

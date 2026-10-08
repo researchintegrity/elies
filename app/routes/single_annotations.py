@@ -2,10 +2,10 @@
 Single-image annotation routes
 Separate from dual annotations for clearer data management.
 """
-from fastapi import APIRouter, Depends, status, Query, HTTPException
-from typing import List, Optional
+from fastapi import APIRouter, Depends, status, Query
+from typing import List
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.schemas import SingleAnnotationCreate, SingleAnnotationResponse
 from app.db.mongodb import get_single_annotations_collection, get_images_collection
@@ -16,7 +16,7 @@ router = APIRouter(prefix="/annotations/single", tags=["single-annotations"])
 
 
 @router.post("", response_model=SingleAnnotationResponse, status_code=status.HTTP_201_CREATED)
-async def create_single_annotation(
+def create_single_annotation(
     annotation_data: SingleAnnotationCreate,
     current_user: dict = Depends(get_current_user)
 ):
@@ -37,7 +37,7 @@ async def create_single_annotation(
     user_id_str = str(current_user["_id"])
     
     # Verify image exists and belongs to user
-    await get_owned_resource(
+    get_owned_resource(
         get_images_collection,
         annotation_data.image_id,
         user_id_str,
@@ -50,11 +50,11 @@ async def create_single_annotation(
         "user_id": user_id_str,
         "image_id": annotation_data.image_id,
         "text": annotation_data.text,
-        "coords": annotation_data.coords.dict(exclude_none=True),
+        "coords": annotation_data.coords.model_dump(exclude_none=True),
         "type": annotation_data.type or "manipulation",
         "shape_type": annotation_data.shape_type or "rectangle",
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow()
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc)
     }
     
     result = annotations_col.insert_one(annotation_doc)
@@ -64,11 +64,11 @@ async def create_single_annotation(
 
 
 @router.get("", response_model=List[SingleAnnotationResponse])
-async def list_single_annotations(
+def list_single_annotations(
     image_id: str = Query(..., description="Image ID to get annotations for"),
     current_user: dict = Depends(get_current_user),
-    limit: int = 100,
-    offset: int = 0
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0)
 ):
     """
     Get single-image annotations for a specific image.
@@ -109,7 +109,7 @@ async def list_single_annotations(
 
 
 @router.get("/{annotation_id}", response_model=SingleAnnotationResponse)
-async def get_single_annotation(
+def get_single_annotation(
     annotation_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -129,7 +129,7 @@ async def get_single_annotation(
     """
     user_id_str = str(current_user["_id"])
     
-    annotation = await get_owned_resource(
+    annotation = get_owned_resource(
         get_single_annotations_collection,
         annotation_id,
         user_id_str,
@@ -141,7 +141,7 @@ async def get_single_annotation(
 
 
 @router.delete("/{annotation_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_single_annotation(
+def delete_single_annotation(
     annotation_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -159,7 +159,7 @@ async def delete_single_annotation(
     user_id_str = str(current_user["_id"])
     
     # Verify annotation exists and belongs to user
-    await get_owned_resource(
+    get_owned_resource(
         get_single_annotations_collection,
         annotation_id,
         user_id_str,

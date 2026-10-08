@@ -3,11 +3,15 @@ Watermark removal service for handling watermark removal operations
 Provides business logic for watermark removal CRUD operations
 """
 
-from bson import ObjectId
+from datetime import datetime, timezone
 from typing import Dict
+
 from app.db.mongodb import get_documents_collection
+from app.exceptions import ValidationError
+from app.services.resource_helpers import get_owned_resource
 from app.schemas import JobType
-from app.services.job_logger import create_job_log
+from app.services.job_logger import create_job_log, ensure_job_capacity
+from app.services.task_submission import submit_task
 from app.tasks.watermark_removal import remove_watermark_from_document
 from app.config.settings import convert_host_path_to_container
 import logging
@@ -15,7 +19,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-async def initiate_watermark_removal(
+def initiate_watermark_removal(
     document_id: str,
     user_id: str,
     aggressiveness_mode: int = 2
@@ -41,44 +45,34 @@ async def initiate_watermark_removal(
         Dictionary with task info and document details
         
     Raises:
-        ValueError: If document not found, validation fails, or mode invalid
+        ValidationError: Invalid mode or not a PDF
+        ResourceNotFoundError: Document not found or not owned by the user
     """
-    documents_col = get_documents_collection()
-    
     # Validate aggressiveness mode
     if aggressiveness_mode not in [1, 2, 3]:
-        raise ValueError(
+        raise ValidationError(
             f"Invalid aggressiveness mode: {aggressiveness_mode}. Must be 1, 2, or 3."
         )
-    
-    # Verify document exists and belongs to user
-    try:
-        doc_oid = ObjectId(document_id)
-    except Exception:
-        raise ValueError("Invalid document ID format")
-    
-    doc = documents_col.find_one({
-        "_id": doc_oid,
-        "user_id": user_id
-    })
-    
-    if not doc:
-        raise ValueError("Document not found")
-    
+
+    documents_col = get_documents_collection()
+
+    doc = get_owned_resource(get_documents_collection, document_id, user_id, "Document")
+    doc_oid = doc["_id"]
+    ensure_job_capacity(user_id)
+
     # Check if document is a PDF
     if not doc.get("file_path", "").lower().endswith(".pdf"):
-        raise ValueError("Document is not a PDF file")
+        raise ValidationError("Document is not a PDF file")
     
     # Resolve the stored file path to absolute path for worker container
     pdf_path = str(convert_host_path_to_container(doc['file_path']))
     
     logger.info(
-        f"Initiating watermark removal for doc_id={document_id}, "
-        f"user_id={user_id}, mode={aggressiveness_mode}"
+        "Initiating watermark removal for doc_id=%s, user_id=%s, mode=%s", document_id, user_id, aggressiveness_mode
     )
     
     # Create job log entry for the jobs dashboard (pending state)
-    doc_name = doc.get("original_filename", document_id)
+    doc_name = doc.get("filename", document_id)
     job_id = create_job_log(
         user_id=user_id,
         job_type=JobType.WATERMARK_REMOVAL,
@@ -87,28 +81,29 @@ async def initiate_watermark_removal(
     )
     
     # Queue async watermark removal task
-    task = remove_watermark_from_document.delay(
+    task = submit_task(remove_watermark_from_document, dict(
         doc_id=document_id,
         user_id=user_id,
         pdf_path=pdf_path,
         aggressiveness_mode=aggressiveness_mode,
         job_id=job_id
-    )
+    ), owner_id=user_id, job_id=job_id)
     
+
     # Update document with task information
     documents_col.update_one(
         {"_id": doc_oid},
         {
             "$set": {
                 "watermark_removal_task_id": task.id,
-                "watermark_removal_requested_at": __import__("datetime").datetime.utcnow(),
+                "watermark_removal_requested_at": datetime.now(timezone.utc),
                 "watermark_removal_status": "queued",
                 "watermark_removal_mode": aggressiveness_mode
             }
         }
     )
     
-    logger.info(f"Watermark removal task queued with ID: {task.id}")
+    logger.info("Watermark removal task queued with ID: %s", task.id)
     
     return {
         "document_id": document_id,
@@ -119,7 +114,7 @@ async def initiate_watermark_removal(
     }
 
 
-async def get_watermark_removal_status(
+def get_watermark_removal_status(
     document_id: str,
     user_id: str
 ) -> Dict:
@@ -134,24 +129,10 @@ async def get_watermark_removal_status(
         Dictionary with status information
         
     Raises:
-        ValueError: If document not found
+        ResourceNotFoundError: Document not found or not owned by the user
     """
-    documents_col = get_documents_collection()
-    
-    # Verify document exists and belongs to user
-    try:
-        doc_oid = ObjectId(document_id)
-    except Exception:
-        raise ValueError("Invalid document ID format")
-    
-    doc = documents_col.find_one({
-        "_id": doc_oid,
-        "user_id": user_id
-    })
-    
-    if not doc:
-        raise ValueError("Document not found")
-    
+    doc = get_owned_resource(get_documents_collection, document_id, user_id, "Document")
+
     # Extract watermark removal information
     status = doc.get("watermark_removal_status", "not_started")
     

@@ -13,7 +13,7 @@ ELIES is a extendable and scalable system totally and forever open source dedica
 - **Panel Extraction**: YOLO-based panel extraction from scientific figures.
 - **Integrity Analysis**:
     - Content-Based Image Retrieval (CBIR)
-    - Copy-Move Detection
+    - Copy-Move Detection (block matching, keypoints, Forgeryscope)
     - Provenance Analysis
     - TruFor (Forgery Detection)
     - Watermark Removal

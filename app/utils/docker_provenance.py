@@ -5,6 +5,8 @@ This module provides functions to interact with the Provenance Analysis microser
 """
 import logging
 import requests
+
+from app.exceptions import TransientError
 from typing import Tuple, Dict, List, Any
 from app.config.settings import (
     PROVENANCE_SERVICE_URL,
@@ -87,7 +89,7 @@ def analyze_provenance(
         "max_workers": max_workers
     }
     
-    logger.info(f"Starting provenance analysis for user {user_id}, query {query_image['id']}")
+    logger.info("Starting provenance analysis for user %s, query %s", user_id, query_image['id'])
     
     try:
         response = requests.post(
@@ -98,11 +100,16 @@ def analyze_provenance(
         
         if response.status_code == 200:
             return True, "Analysis completed successfully", response.json()
-        else:
+        try:
             error_detail = response.json().get("detail", response.text)
-            logger.error(f"Provenance analysis failed: {error_detail}")
-            return False, f"Analysis failed: {error_detail}", {}
-            
+        except ValueError:
+            error_detail = response.text
+        logger.error("Provenance analysis failed: %s", error_detail)
+        return False, f"Analysis failed: {error_detail}", {}
+
+    except requests.ConnectionError as e:
+        # Service not reachable (e.g. still starting): let the task retry
+        raise TransientError(f"Provenance service unreachable: {e}") from e
     except requests.RequestException as e:
-        logger.error(f"Provenance service request failed: {e}")
+        logger.error("Provenance service request failed: %s", e)
         return False, f"Provenance service error: {str(e)}", {}

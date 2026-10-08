@@ -3,7 +3,6 @@ import requests
 import time
 import os
 import uuid
-from pathlib import Path
 
 # Configuration
 BASE_URL = os.getenv("API_URL", "http://localhost:8000")

@@ -1,1 +1,1 @@
-"""ELIES User Management System - Database package"""
+"""ELIES database access (MongoDB)."""

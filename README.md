@@ -52,6 +52,8 @@ git submodule update --init --remote # ensure latest submodule versions
 cp .env.example .env
 # Edit .env to set the HOST_WORKSPACE_PATH
 # >> HOST_WORKSPACE_PATH=<path/to-current-dir>/elies/system_modules/elies-frontend/workspace
+# Set a JWT signing secret (required; the API will not start without one):
+# >> JWT_SECRET=<output of: python -c "import secrets; print(secrets.token_urlsafe(48))">
 ```
 
 #### 2. Build the tools
@@ -69,6 +71,13 @@ docker compose up -d
 ```bash
 docker compose -f docker-compose-prod.yml up -d --scale workers=5 
 ```
+For a server deployment (TLS, network exposure, backups), follow the [deployment guide](docs/development/deployment.md).
+
+#### 3.1 Create the first administrator
+There is no default account. Create an administrator (the generated password is printed once):
+```bash
+docker compose exec api python -m app.cli create-admin --username admin --email admin@example.org --generate-password
+```
 
 #### 4. Launch the frontend
 ```bash
@@ -82,6 +91,18 @@ After instalation, visit **[http://localhost:5173](http://localhost:5173)** to s
 > [!TIP]
 > **Need more details?**
 > Check our [Technical Overview](docs/TECHNICAL_OVERVIEW.md) for a deep dive into the architecture, manual installation, and API documentation.
+
+### Documentation
+
+| Topic | Where |
+|---|---|
+| Development setup and tests | [docs/development/setup.md](docs/development/setup.md), [docs/development/testing.md](docs/development/testing.md) |
+| Configuration (every setting) | [docs/development/configuration.md](docs/development/configuration.md) |
+| Deployment, backups, security | [docs/development/deployment.md](docs/development/deployment.md), [SECURITY.md](SECURITY.md) |
+| API guide and endpoint list | [API_REFERENCE.md](API_REFERENCE.md), [docs/api/endpoints.md](docs/api/endpoints.md), `/docs` on a running API |
+| Contributing | [CONTRIBUTING.md](CONTRIBUTING.md) |
+
+The documentation can also be browsed as a site: `pip install -r requirements-docs.txt && mkdocs serve`.
 
 ### Upgrading from ELIS
 
@@ -110,6 +131,7 @@ ELIES integrates multiple specialized modules to detect manipulation.
 | **[CBIR Search](https://github.com/researchintegrity/cbir-system)** | Finds similar images across datasets. | <div align="center">✅</div> |
 | **[TruFor](https://github.com/researchintegrity/TruFor)** | Detects cheapfakes and image manipulations. | <div align="center">✅</div> |
 | **[Copy-Move Detection](https://github.com/researchintegrity/copy-move-detection)** | Identifies duplicated regions within and across images.| <div align="center">✅</div> |
+| **[Forgeryscope](https://github.com/researchintegrity/forgeryscope)** | Finds duplicated panels, panel regions and western blot lanes within a figure. | <div align="center">✅</div> |
 | **[Provenance Analysis](https://github.com/researchintegrity/provenance-analysis)** | Tracks reused and manipulated data across articles and datasets. | <div align="center">✅</div> |
 
 
@@ -133,6 +155,7 @@ Learn more about her work at her blog: [Science Integrity Digest](https://scienc
 **Special Thanks:**
 *   **[Forensically](https://29a.ch/photo-forensics/#help)**: The Image Analysis module is deeply inspired by this project. Shoutout to [Jonas Wagner](https://github.com/jwagner).
 *   **[UNINA Image Processing Research Group](https://www.grip.unina.it/)**: For their work on Dense-Field copy-move detection and [TruFor](https://github.com/grip-unina/TruFor) methods.
+*   **Uladzislau Leketush**: For [Forgeryscope](https://github.com/vlad3996/forgeryscope), his winning solution of the Kaggle *Scientific Image Forgery Detection* competition.
 
 ---
 

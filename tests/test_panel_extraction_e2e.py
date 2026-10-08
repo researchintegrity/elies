@@ -28,7 +28,6 @@ from unittest.mock import patch, MagicMock
 from app.db.mongodb import get_images_collection, db_connection
 from app.config.settings import (
     CONTAINER_WORKSPACE_PATH,
-    HOST_WORKSPACE_PATH,
 )
 
 # Configuration

@@ -1,36 +1,21 @@
 """
-ELIES Scientific Image Analysis System
+Run the API with uvicorn: ``python -m app``.
 
-This module allows running the application as a package:
-    python -m app
+Development reload is off unless ELIES_RELOAD=true; host and port come from
+API_HOST (default 127.0.0.1) and API_PORT (default 8000).
 """
+import os
 
 import uvicorn
-import sys
-from pathlib import Path
-
-# Ensure the project root is in the path
-project_root = Path(__file__).parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
 
 
-def main():
-    """Run the FastAPI application"""
-    try:
-        uvicorn.run(
-            "app.main:app",
-            host="0.0.0.0",
-            port=8000,
-            reload=True,
-            log_level="info"
-        )
-    except KeyboardInterrupt:
-        print("Server shutdown requested")
-        sys.exit(0)
-    except Exception as e:
-        print(f"Error starting server: {str(e)}")
-        sys.exit(1)
+def main() -> None:
+    uvicorn.run(
+        "app.main:app",
+        host=os.getenv("API_HOST", "127.0.0.1"),
+        port=int(os.getenv("API_PORT", "8000")),
+        reload=os.getenv("ELIES_RELOAD", "false").lower() in ("1", "true", "yes"),
+    )
 
 
 if __name__ == "__main__":

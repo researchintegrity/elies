@@ -1,20 +1,38 @@
 """
-Frontend-specific API routes for dashboard, documents, and images
-Provides unified endpoints with pagination, filtering, and standardized responses
+Deprecated /api/* routes (issue #74).
+
+These duplicate /documents, /images, /health and /jobs with a different
+response envelope, and the frontend does not use them. They are kept for
+existing API clients, marked deprecated in the OpenAPI schema and answered
+with a ``Deprecation: true`` header; new code should use the main routes.
 """
 
-from fastapi import APIRouter, Query, HTTPException, Depends
-from datetime import datetime
+import re
+
+from fastapi import APIRouter, Depends, Query, Response
+from datetime import datetime, timezone
 from typing import Optional
 from app.schemas import ApiResponse, PaginatedResponse
-from app.db.mongodb import get_users_collection, get_documents_collection, get_images_collection
+from app.config.storage_quota import DEFAULT_USER_STORAGE_QUOTA
+from app.db.mongodb import get_documents_collection, get_images_collection
 from app.utils.security import get_current_user
-from bson import ObjectId
 from app.services.document_service import delete_document_and_artifacts
 from app.services.image_service import delete_image_and_artifacts, list_images as list_images_service
 from app.services.resource_helpers import get_owned_resource
 
-router = APIRouter(prefix="/api", tags=["api"])
+
+
+def _deprecation_headers(response: Response) -> None:
+    response.headers["Deprecation"] = "true"
+    response.headers["Link"] = '</docs>; rel="deprecation"'
+
+
+router = APIRouter(
+    prefix="/api",
+    tags=["api (deprecated)"],
+    deprecated=True,
+    dependencies=[Depends(_deprecation_headers)],
+)
 
 
 # ============================================================================
@@ -27,14 +45,14 @@ router = APIRouter(prefix="/api", tags=["api"])
     summary="Health Check",
     description="Check if the API is running and responsive"
 )
-async def health_check():
+def health_check():
     """
     Health check endpoint to verify API is operational
     """
     return ApiResponse(
         success=True,
         message="API is healthy and operational",
-        data={"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+        data={"status": "healthy", "timestamp": datetime.now(timezone.utc).isoformat()}
     )
 
 
@@ -48,7 +66,7 @@ async def health_check():
     summary="Get Dashboard Statistics",
     description="Retrieve overall system statistics for the dashboard"
 )
-async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
+def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
     """
     Get dashboard statistics including document count, image count, and storage usage
     
@@ -58,39 +76,33 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
     Returns:
         Dashboard statistics with success status
     """
-    try:
-        user_id = str(current_user.get("_id"))
-        
-        # Get document count
-        doc_collection = get_documents_collection()
-        doc_count = doc_collection.count_documents({"user_id": user_id})
-        
-        # Get image count
-        img_collection = get_images_collection()
-        img_count = img_collection.count_documents({"user_id": user_id})
-        
-        # Get user storage info
-        user_collection = get_users_collection()
-        user = user_collection.find_one({"_id": ObjectId(user_id)})
-        
-        storage_used = user.get("storage_used", 0) if user else 0
-        storage_limit = 1073741824  # 1 GB default limit
-        storage_remaining = max(0, storage_limit - storage_used)
-        
-        return ApiResponse(
-            success=True,
-            message="Dashboard statistics retrieved successfully",
-            data={
-                "total_documents": doc_count,
-                "total_images": img_count,
-                "storage_used": storage_used,
-                "storage_limit": storage_limit,
-                "storage_remaining": storage_remaining,
-                "storage_percent_used": round((storage_used / storage_limit) * 100, 2)
-            }
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    user_id = str(current_user.get("_id"))
+    
+    # Get document count
+    doc_collection = get_documents_collection()
+    doc_count = doc_collection.count_documents({"user_id": user_id})
+    
+    # Get image count
+    img_collection = get_images_collection()
+    img_count = img_collection.count_documents({"user_id": user_id})
+    
+    # Storage figures come from the user record (kept current on every upload/delete)
+    storage_used = current_user.get("storage_used_bytes", 0)
+    storage_limit = current_user.get("storage_limit_bytes", DEFAULT_USER_STORAGE_QUOTA)
+    storage_remaining = max(0, storage_limit - storage_used)
+    
+    return ApiResponse(
+        success=True,
+        message="Dashboard statistics retrieved successfully",
+        data={
+            "total_documents": doc_count,
+            "total_images": img_count,
+            "storage_used": storage_used,
+            "storage_limit": storage_limit,
+            "storage_remaining": storage_remaining,
+            "storage_percent_used": round((storage_used / storage_limit) * 100, 2) if storage_limit else 0.0
+        }
+    )
 
 
 # ============================================================================
@@ -103,11 +115,11 @@ async def get_dashboard_stats(current_user: dict = Depends(get_current_user)):
     summary="List User Documents",
     description="Retrieve paginated list of user's documents with optional filtering"
 )
-async def list_documents(
+def list_documents(
     current_user: dict = Depends(get_current_user),
     page: int = Query(1, ge=1, description="Page number starting from 1"),
     per_page: int = Query(10, ge=1, le=100, description="Items per page"),
-    sort_by: str = Query("uploaded_date", description="Sort field: uploaded_date, filename"),
+    sort_by: str = Query("uploaded_date", pattern="^(uploaded_date|filename|file_size)$", description="Sort field: uploaded_date, filename, file_size"),
     order: str = Query("desc", description="Sort order: asc or desc"),
     search: Optional[str] = Query(None, description="Search in filename")
 ):
@@ -125,54 +137,51 @@ async def list_documents(
     Returns:
         Paginated list of documents
     """
-    try:
-        user_id = str(current_user.get("_id"))
-        collection = get_documents_collection()
-        
-        # Build filter
-        filter_query = {"user_id": user_id}
-        if search:
-            filter_query["filename"] = {"$regex": search, "$options": "i"}
-        
-        # Get total count
-        total_items = collection.count_documents(filter_query)
-        total_pages = (total_items + per_page - 1) // per_page
-        
-        # Validate pagination
-        if page > total_pages and total_pages > 0:
-            page = total_pages
-        
-        # Calculate skip
-        skip = (page - 1) * per_page
-        
-        # Build sort order
-        sort_order = -1 if order.lower() == "desc" else 1
-        
-        # Query documents
-        documents = list(collection.find(filter_query)
-                        .sort(sort_by, sort_order)
-                        .skip(skip)
-                        .limit(per_page))
-        
-        # Convert ObjectId to string for JSON serialization
-        for doc in documents:
-            doc["_id"] = str(doc["_id"])
-            if "user_id" in doc:
-                doc["user_id"] = str(doc["user_id"])
-        
-        return PaginatedResponse(
-            success=True,
-            message="Documents retrieved successfully",
-            data=documents,
-            pagination={
-                "current_page": page,
-                "total_pages": total_pages,
-                "page_size": per_page,
-                "total_items": total_items
-            }
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    user_id = str(current_user.get("_id"))
+    collection = get_documents_collection()
+    
+    # Build filter
+    filter_query = {"user_id": user_id}
+    if search:
+        filter_query["filename"] = {"$regex": re.escape(search), "$options": "i"}
+    
+    # Get total count
+    total_items = collection.count_documents(filter_query)
+    total_pages = (total_items + per_page - 1) // per_page
+    
+    # Validate pagination
+    if page > total_pages and total_pages > 0:
+        page = total_pages
+    
+    # Calculate skip
+    skip = (page - 1) * per_page
+    
+    # Build sort order
+    sort_order = -1 if order.lower() == "desc" else 1
+    
+    # Query documents
+    documents = list(collection.find(filter_query)
+                    .sort(sort_by, sort_order)
+                    .skip(skip)
+                    .limit(per_page))
+    
+    # Convert ObjectId to string for JSON serialization
+    for doc in documents:
+        doc["_id"] = str(doc["_id"])
+        if "user_id" in doc:
+            doc["user_id"] = str(doc["user_id"])
+    
+    return PaginatedResponse(
+        success=True,
+        message="Documents retrieved successfully",
+        data=documents,
+        pagination={
+            "current_page": page,
+            "total_pages": total_pages,
+            "page_size": per_page,
+            "total_items": total_items
+        }
+    )
 
 
 @router.get(
@@ -181,7 +190,7 @@ async def list_documents(
     summary="Get Document Details",
     description="Retrieve detailed information about a specific document"
 )
-async def get_document_detail(
+def get_document_detail(
     document_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -195,37 +204,32 @@ async def get_document_detail(
     Returns:
         Document details with associated images
     """
-    try:
-        user_id = str(current_user.get("_id"))
-        
-        # Get document with ownership validation
-        document = await get_owned_resource(
-            get_documents_collection,
-            document_id,
-            user_id,
-            "Document"
-        )
-        
-        # Convert ObjectId to string
-        document["_id"] = str(document["_id"])
-        
-        # Get associated images
-        img_collection = get_images_collection()
-        images = list(img_collection.find({"document_id": document_id}))
-        for img in images:
-            img["_id"] = str(img["_id"])
-        
-        document["associated_images"] = images
-        
-        return ApiResponse(
-            success=True,
-            message="Document retrieved successfully",
-            data=document
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    user_id = str(current_user.get("_id"))
+    
+    # Get document with ownership validation
+    document = get_owned_resource(
+        get_documents_collection,
+        document_id,
+        user_id,
+        "Document"
+    )
+    
+    # Convert ObjectId to string
+    document["_id"] = str(document["_id"])
+    
+    # Get associated images
+    img_collection = get_images_collection()
+    images = list(img_collection.find({"document_id": document_id, "user_id": user_id}, {"exif_metadata": 0}))
+    for img in images:
+        img["_id"] = str(img["_id"])
+    
+    document["associated_images"] = images
+    
+    return ApiResponse(
+        success=True,
+        message="Document retrieved successfully",
+        data=document
+    )
 
 
 @router.delete(
@@ -234,7 +238,7 @@ async def get_document_detail(
     summary="Delete Document",
     description="Delete a document and its associated images and annotations"
 )
-async def delete_document(
+def delete_document(
     document_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -256,29 +260,16 @@ async def delete_document(
     Returns:
         Success message with deletion statistics
     """
-    try:
-        result = await delete_document_and_artifacts(
-            document_id=document_id,
-            user_id=str(current_user.get("_id"))
-        )
-        
-        return ApiResponse(
-            success=True,
-            message="Document and associated images deleted successfully",
-            data=result
-        )
-    except ValueError as e:
-        error_msg = str(e)
-        if "Invalid document ID" in error_msg:
-            raise HTTPException(status_code=400, detail=error_msg)
-        elif "Document not found" in error_msg:
-            raise HTTPException(status_code=404, detail=error_msg)
-        else:
-            raise HTTPException(status_code=500, detail=error_msg)
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    result = delete_document_and_artifacts(
+        document_id=document_id,
+        user_id=str(current_user.get("_id"))
+    )
+    
+    return ApiResponse(
+        success=True,
+        message="Document and associated images deleted successfully",
+        data=result
+    )
 
 
 # ============================================================================
@@ -291,11 +282,11 @@ async def delete_document(
     summary="List User Images",
     description="Retrieve paginated list of user's images with optional filtering"
 )
-async def list_images(
+def list_images(
     current_user: dict = Depends(get_current_user),
     page: int = Query(1, ge=1, description="Page number starting from 1"),
     per_page: int = Query(20, ge=1, le=100, description="Items per page"),
-    sort_by: str = Query("uploaded_date", description="Sort field"),
+    sort_by: str = Query("uploaded_date", pattern="^(uploaded_date|filename|file_size|source_type)$", description="Sort field"),
     order: str = Query("desc", description="Sort order: asc or desc"),
     source_type: Optional[str] = Query(None, description="Filter by source type: uploaded, extracted"),
     document_id: Optional[str] = Query(None, description="Filter by document ID"),
@@ -323,53 +314,48 @@ async def list_images(
     Returns:
         Paginated list of images
     """
-    try:
-        user_id = str(current_user.get("_id"))
-        
-        # Build sort order
-        sort_order = -1 if order.lower() == "desc" else 1
-        
-        # Parse image_type from comma-separated string
-        parsed_image_type = [t.strip() for t in image_type.split(",")] if image_type else None
-        
-        # Use service to get images (get all to calculate pagination)
-        result = await list_images_service(
-            user_id=user_id,
-            source_type=source_type,
-            document_id=document_id,
-            image_type=parsed_image_type,
-            date_from=date_from,
-            date_to=date_to,
-            search=search,
-            limit=per_page,
-            offset=(page - 1) * per_page,
-            sort_by=sort_by,
-            sort_order=sort_order
-        )
-        
-        # Calculate pagination
-        total_items = result["total"]
-        total_pages = (total_items + per_page - 1) // per_page
-        
-        # Validate page
-        if page > total_pages and total_pages > 0:
-            page = total_pages
-        
-        return PaginatedResponse(
-            success=True,
-            message="Images retrieved successfully",
-            data=result["images"],
-            pagination={
-                "current_page": page,
-                "total_pages": total_pages,
-                "page_size": per_page,
-                "total_items": total_items
-            }
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    user_id = str(current_user.get("_id"))
+    
+    # Build sort order
+    sort_order = -1 if order.lower() == "desc" else 1
+    
+    # Parse image_type from comma-separated string
+    parsed_image_type = [t.strip() for t in image_type.split(",")] if image_type else None
+    
+    # Use service to get images (get all to calculate pagination)
+    result = list_images_service(
+        user_id=user_id,
+        source_type=source_type,
+        document_id=document_id,
+        image_type=parsed_image_type,
+        date_from=date_from,
+        date_to=date_to,
+        search=search,
+        limit=per_page,
+        offset=(page - 1) * per_page,
+        sort_by=sort_by,
+        sort_order=sort_order
+    )
+    
+    # Calculate pagination
+    total_items = result["total"]
+    total_pages = (total_items + per_page - 1) // per_page
+    
+    # Validate page
+    if page > total_pages and total_pages > 0:
+        page = total_pages
+    
+    return PaginatedResponse(
+        success=True,
+        message="Images retrieved successfully",
+        data=result["images"],
+        pagination={
+            "current_page": page,
+            "total_pages": total_pages,
+            "page_size": per_page,
+            "total_items": total_items
+        }
+    )
 
 
 @router.get(
@@ -378,7 +364,7 @@ async def list_images(
     summary="Get Image Details",
     description="Retrieve detailed information about a specific image"
 )
-async def get_image_detail(
+def get_image_detail(
     image_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -392,32 +378,17 @@ async def get_image_detail(
     Returns:
         Image details
     """
-    try:
-        user_id = str(current_user.get("_id"))
-        collection = get_images_collection()
-        
-        try:
-            img_oid = ObjectId(image_id)
-        except:
-            raise HTTPException(status_code=400, detail="Invalid image ID format")
-        
-        image = collection.find_one({"_id": img_oid, "user_id": user_id})
-        
-        if not image:
-            raise HTTPException(status_code=404, detail="Image not found")
-        
-        # Convert ObjectId to string
-        image["_id"] = str(image["_id"])
-        
-        return ApiResponse(
-            success=True,
-            message="Image retrieved successfully",
-            data=image
-        )
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    user_id = str(current_user.get("_id"))
+    image = get_owned_resource(get_images_collection, image_id, user_id, "Image")
+    
+    # Convert ObjectId to string
+    image["_id"] = str(image["_id"])
+    
+    return ApiResponse(
+        success=True,
+        message="Image retrieved successfully",
+        data=image
+    )
 
 
 @router.delete(
@@ -426,7 +397,7 @@ async def get_image_detail(
     summary="Delete Image",
     description="Delete a specific image"
 )
-async def delete_image(
+def delete_image(
     image_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -440,31 +411,16 @@ async def delete_image(
     Returns:
         Success message
     """
-    try:
-        result = await delete_image_and_artifacts(
-            image_id=image_id,
-            user_id=str(current_user.get("_id"))
-        )
-        
-        return ApiResponse(
-            success=True,
-            message="Image deleted successfully",
-            data=result
-        )
-    except ValueError as e:
-        error_msg = str(e)
-        if "Invalid image ID" in error_msg:
-            raise HTTPException(status_code=400, detail=error_msg)
-        elif "not found" in error_msg:
-            raise HTTPException(status_code=404, detail=error_msg)
-        elif "Cannot delete" in error_msg:
-            raise HTTPException(status_code=403, detail=error_msg)
-        else:
-            raise HTTPException(status_code=500, detail=str(e))
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    result = delete_image_and_artifacts(
+        image_id=image_id,
+        user_id=str(current_user.get("_id"))
+    )
+    
+    return ApiResponse(
+        success=True,
+        message="Image deleted successfully",
+        data=result
+    )
 
 
 # ============================================================================
@@ -477,10 +433,10 @@ async def delete_image(
     summary="Global Search",
     description="Search across documents and images"
 )
-async def global_search(
-    query: str = Query(..., min_length=1, description="Search query"),
+def global_search(
+    query: str = Query(..., min_length=1, max_length=200, description="Search query"),
     current_user: dict = Depends(get_current_user),
-    page: int = Query(1, ge=1, description="Page number starting from 1"),
+    page: int = Query(1, ge=1, le=1000, description="Page number starting from 1"),
     per_page: int = Query(20, ge=1, le=100, description="Items per page")
 ):
     """
@@ -495,58 +451,42 @@ async def global_search(
     Returns:
         Paginated search results
     """
-    try:
-        user_id = str(current_user.get("_id"))
-        
-        # Search documents
-        doc_collection = get_documents_collection()
-        documents = list(doc_collection.find({
-            "user_id": user_id,
-            "filename": {"$regex": query, "$options": "i"}
-        }))
-        
-        # Search images
-        img_collection = get_images_collection()
-        images = list(img_collection.find({
-            "user_id": user_id,
-            "filename": {"$regex": query, "$options": "i"}
-        }))
-        
-        # Combine results
-        results = []
-        for doc in documents:
-            doc["_id"] = str(doc["_id"])
-            doc["type"] = "document"
-            results.append(doc)
-        
-        for img in images:
-            img["_id"] = str(img["_id"])
-            img["type"] = "image"
-            results.append(img)
-        
-        # Sort by uploaded_date (newest first)
-        results.sort(key=lambda x: x.get("uploaded_date", datetime.utcnow()), reverse=True)
-        
-        # Paginate
-        total_items = len(results)
-        total_pages = (total_items + per_page - 1) // per_page
-        
-        if page > total_pages and total_pages > 0:
-            page = total_pages
-        
-        skip = (page - 1) * per_page
-        paginated_results = results[skip:skip + per_page]
-        
-        return PaginatedResponse(
-            success=True,
-            message=f"Found {total_items} results for '{query}'",
-            data=paginated_results,
-            pagination={
-                "current_page": page,
-                "total_pages": total_pages,
-                "page_size": per_page,
-                "total_items": total_items
-            }
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    user_id = str(current_user.get("_id"))
+    name_filter = {"user_id": user_id, "filename": {"$regex": re.escape(query), "$options": "i"}}
+    projection = {"exif_metadata": 0, "extracted_images": 0}
+    skip = (page - 1) * per_page
+
+    # Fetch only the newest page*per_page matches of each kind, then merge
+    doc_collection = get_documents_collection()
+    img_collection = get_images_collection()
+    documents = list(doc_collection.find(name_filter, projection).sort("uploaded_date", -1).limit(skip + per_page))
+    images = list(img_collection.find(name_filter, projection).sort("uploaded_date", -1).limit(skip + per_page))
+    total_items = doc_collection.count_documents(name_filter) + img_collection.count_documents(name_filter)
+
+    results = []
+    for doc in documents:
+        doc["_id"] = str(doc["_id"])
+        doc["type"] = "document"
+        results.append(doc)
+    for img in images:
+        img["_id"] = str(img["_id"])
+        img["type"] = "image"
+        results.append(img)
+
+    results.sort(key=lambda x: x.get("uploaded_date") or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    paginated_results = results[skip:skip + per_page]
+    total_pages = (total_items + per_page - 1) // per_page
+
+    return PaginatedResponse(
+        success=True,
+        message=f"Found {total_items} results for '{query}'",
+        data=paginated_results,
+        pagination={
+            "current_page": page,
+            "total_pages": total_pages,
+            "page_size": per_page,
+            "total_items": total_items
+        }
+    )
+
+

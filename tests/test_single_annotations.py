@@ -8,6 +8,9 @@ import os
 
 from app.db.mongodb import db_connection
 
+# Calls a running API server (API_URL, default http://localhost:8000): run with -m e2e
+pytestmark = pytest.mark.e2e
+
 BASE_URL = os.getenv("API_URL", "http://localhost:8000")
 
 @pytest.fixture(scope="session", autouse=True)

@@ -5,10 +5,14 @@ This module provides functions to interact with the CBIR microservice
 for image similarity search and indexing.
 """
 import logging
+import time
+
 import requests
 from typing import Tuple, Dict, List, Optional, Any
+from app.exceptions import TransientError
 from app.config.settings import (
     convert_host_path_to_container,
+    CBIR_HEALTH_CACHE_SECONDS,
     CBIR_SERVICE_URL,
     CBIR_TIMEOUT,
 )
@@ -18,27 +22,34 @@ logger = logging.getLogger(__name__)
 
 def _convert_cbir_path_to_response(cbir_path: str, user_id: str) -> str:
     """
-    Convert a CBIR path back to the format used by our backend.
-    
-    Args:
-        cbir_path: Path from CBIR (e.g., /workspace/user_id/images/...)
-        user_id: User ID for validation
-        
-    Returns:
-        Path in backend format (workspace/user_id/...)
+    Map a path returned by CBIR back to the backend's stored format.
+
+    The backend sends container paths (under CONTAINER_WORKSPACE_PATH) to CBIR,
+    which returns them unchanged, so they already match ``images.file_path``.
     """
-    if cbir_path.startswith("/workspace/"):
-        return f"workspace{cbir_path[len('/workspace'):]}"
     return cbir_path
 
 
-def check_cbir_health() -> Tuple[bool, str]:
+# Cache health results briefly: uploads check health on every request
+_HEALTH_CACHE_TTL_OK = CBIR_HEALTH_CACHE_SECONDS
+_HEALTH_CACHE_TTL_FAILED = min(5, CBIR_HEALTH_CACHE_SECONDS)
+_health_cache: Dict[str, Any] = {"expires": 0.0, "value": None}
+
+
+def check_cbir_health(use_cache: bool = True) -> Tuple[bool, str]:
     """
     Check if the CBIR service is healthy.
-    
+
+    Results are cached for CBIR_HEALTH_CACHE_SECONDS (failures for at most 5s)
+    so that request handlers don't make a blocking HTTP call every time.
+
     Returns:
         Tuple (healthy, message)
     """
+    now = time.monotonic()
+    if use_cache and _health_cache["value"] is not None and now < _health_cache["expires"]:
+        return _health_cache["value"]
+
     try:
         response = requests.get(
             f"{CBIR_SERVICE_URL}/health",
@@ -47,11 +58,17 @@ def check_cbir_health() -> Tuple[bool, str]:
         if response.status_code == 200:
             data = response.json()
             if data.get("model") and data.get("database"):
-                return True, "CBIR service is healthy"
-            return False, f"CBIR service partially initialized: {data}"
-        return False, f"CBIR service returned status {response.status_code}"
-    except requests.RequestException as e:
-        return False, f"Failed to connect to CBIR service: {str(e)}"
+                result = (True, "CBIR service is healthy")
+            else:
+                result = (False, f"CBIR service partially initialized: {data}")
+        else:
+            result = (False, f"CBIR service returned status {response.status_code}")
+    except (requests.RequestException, ValueError) as e:
+        result = (False, f"Failed to connect to CBIR service: {str(e)}")
+
+    ttl = _HEALTH_CACHE_TTL_OK if result[0] else _HEALTH_CACHE_TTL_FAILED
+    _health_cache.update(expires=now + ttl, value=result)
+    return result
 
 
 def index_image(
@@ -78,7 +95,7 @@ def index_image(
         "labels": labels or []
     }
     
-    logger.info(f"Indexing image for user {user_id}: {cbir_path}")
+    logger.info("Indexing image for user %s: %s", user_id, cbir_path)
     
     try:
         response = requests.post(
@@ -92,11 +109,11 @@ def index_image(
             return True, "Image indexed successfully", data
         else:
             error_detail = response.json().get("detail", response.text)
-            logger.error(f"CBIR index failed: {error_detail}")
+            logger.error("CBIR index failed: %s", error_detail)
             return False, f"Index failed: {error_detail}", {}
             
     except requests.RequestException as e:
-        logger.error(f"CBIR service request failed: {e}")
+        logger.error("CBIR service request failed: %s", e)
         return False, f"CBIR service error: {str(e)}", {}
 
 
@@ -129,7 +146,7 @@ def index_images_batch(
         "items": items
     }
     
-    logger.info(f"Batch indexing {len(items)} images for user {user_id}")
+    logger.info("Batch indexing %s images for user %s", len(items), user_id)
     
     try:
         response = requests.post(
@@ -143,11 +160,11 @@ def index_images_batch(
             return True, f"Indexed {data.get('indexed_count', 0)} images", data
         else:
             error_detail = response.json().get("detail", response.text)
-            logger.error(f"CBIR batch index failed: {error_detail}")
+            logger.error("CBIR batch index failed: %s", error_detail)
             return False, f"Batch index failed: {error_detail}", {}
             
     except requests.RequestException as e:
-        logger.error(f"CBIR service request failed: {e}")
+        logger.error("CBIR service request failed: %s", e)
         return False, f"CBIR service error: {str(e)}", {}
 
 
@@ -179,7 +196,7 @@ def search_similar_images(
         "labels": labels
     }
     
-    logger.info(f"Searching similar images for user {user_id}, top_k={top_k}")
+    logger.info("Searching similar images for user %s, top_k=%s", user_id, top_k)
     
     try:
         response = requests.post(
@@ -203,11 +220,11 @@ def search_similar_images(
             return True, f"Found {len(results)} similar images", results
         else:
             error_detail = response.json().get("detail", response.text)
-            logger.error(f"CBIR search failed: {error_detail}")
+            logger.error("CBIR search failed: %s", error_detail)
             return False, f"Search failed: {error_detail}", []
             
     except requests.RequestException as e:
-        logger.error(f"CBIR service request failed: {e}")
+        logger.error("CBIR service request failed: %s", e)
         return False, f"CBIR service error: {str(e)}", []
 
 
@@ -243,7 +260,7 @@ def search_similar_images_upload(
         "file": (filename, image_data)
     }
     
-    logger.info(f"Searching similar images (upload) for user {user_id}, top_k={top_k}")
+    logger.info("Searching similar images (upload) for user %s, top_k=%s", user_id, top_k)
     
     try:
         response = requests.post(
@@ -268,11 +285,11 @@ def search_similar_images_upload(
             return True, f"Found {len(results)} similar images", results
         else:
             error_detail = response.json().get("detail", response.text)
-            logger.error(f"CBIR search upload failed: {error_detail}")
+            logger.error("CBIR search upload failed: %s", error_detail)
             return False, f"Search failed: {error_detail}", []
             
     except requests.RequestException as e:
-        logger.error(f"CBIR service request failed: {e}")
+        logger.error("CBIR service request failed: %s", e)
         return False, f"CBIR service error: {str(e)}", []
 
 
@@ -297,7 +314,7 @@ def delete_image_from_index(
         "image_path": cbir_path
     }
     
-    logger.info(f"Deleting image from CBIR index: {cbir_path}")
+    logger.info("Deleting image from CBIR index: %s", cbir_path)
     
     try:
         response = requests.post(
@@ -308,55 +325,17 @@ def delete_image_from_index(
         
         if response.status_code == 200:
             return True, "Image deleted from index"
-        else:
-            error_detail = response.json().get("detail", response.text)
-            return False, f"Delete failed: {error_detail}"
-            
+        if response.status_code >= 500:
+            raise TransientError(f"CBIR delete failed with HTTP {response.status_code}")
+        error_detail = response.json().get("detail", response.text)
+        return False, f"Delete failed: {error_detail}"
+
+    except (requests.ConnectionError, requests.Timeout) as e:
+        # Deletion must not be lost: let the Celery task retry
+        raise TransientError(f"CBIR service unreachable: {e}") from e
     except requests.RequestException as e:
-        logger.error(f"CBIR service request failed: {e}")
+        logger.error("CBIR service request failed: %s", e)
         return False, f"CBIR service error: {str(e)}"
-
-
-def delete_images_batch(
-    user_id: str,
-    image_paths: List[str]
-) -> Tuple[bool, str, Dict]:
-    """
-    Delete multiple images from the CBIR index.
-    
-    Args:
-        user_id: User ID for multi-tenancy isolation
-        image_paths: List of image paths to delete
-        
-    Returns:
-        Tuple (success, message, result_data)
-    """
-    cbir_paths = [str(convert_host_path_to_container(p)) for p in image_paths]
-    
-    payload = {
-        "user_id": user_id,
-        "image_paths": cbir_paths
-    }
-    
-    logger.info(f"Batch deleting {len(cbir_paths)} images from CBIR index")
-    
-    try:
-        response = requests.post(
-            f"{CBIR_SERVICE_URL}/delete/batch",
-            json=payload,
-            timeout=CBIR_TIMEOUT
-        )
-        
-        if response.status_code == 200:
-            data = response.json()
-            return True, f"Deleted {data.get('deleted_count', 0)} images", data
-        else:
-            error_detail = response.json().get("detail", response.text)
-            return False, f"Batch delete failed: {error_detail}", {}
-            
-    except requests.RequestException as e:
-        logger.error(f"CBIR service request failed: {e}")
-        return False, f"CBIR service error: {str(e)}", {}
 
 
 def delete_user_data(user_id: str) -> Tuple[bool, str]:
@@ -374,7 +353,7 @@ def delete_user_data(user_id: str) -> Tuple[bool, str]:
         "image_path": ""  # Not used for user deletion
     }
     
-    logger.info(f"Deleting all CBIR data for user {user_id}")
+    logger.info("Deleting all CBIR data for user %s", user_id)
     
     try:
         response = requests.post(
@@ -385,12 +364,16 @@ def delete_user_data(user_id: str) -> Tuple[bool, str]:
         
         if response.status_code == 200:
             return True, f"Deleted all data for user {user_id}"
-        else:
-            error_detail = response.json().get("detail", response.text)
-            return False, f"User data delete failed: {error_detail}"
-            
+        if response.status_code >= 500:
+            raise TransientError(f"CBIR user data delete failed with HTTP {response.status_code}")
+        error_detail = response.json().get("detail", response.text)
+        return False, f"User data delete failed: {error_detail}"
+
+    except (requests.ConnectionError, requests.Timeout) as e:
+        # Deletion must not be lost: let the Celery task retry
+        raise TransientError(f"CBIR service unreachable: {e}") from e
     except requests.RequestException as e:
-        logger.error(f"CBIR service request failed: {e}")
+        logger.error("CBIR service request failed: %s", e)
         return False, f"CBIR service error: {str(e)}"
 
 
@@ -416,7 +399,7 @@ def check_images_indexed(
         "image_paths": cbir_paths
     }
     
-    logger.info(f"Checking {len(cbir_paths)} images indexed status")
+    logger.info("Checking %s images indexed status", len(cbir_paths))
     
     try:
         response = requests.post(
@@ -439,7 +422,7 @@ def check_images_indexed(
             return False, f"Check visibility failed: {error_detail}", {}
             
     except requests.RequestException as e:
-        logger.error(f"CBIR service request failed: {e}")
+        logger.error("CBIR service request failed: %s", e)
         return False, f"CBIR service error: {str(e)}", {}
 
 
@@ -469,7 +452,7 @@ def update_image_labels(
         "labels": labels
     }
     
-    logger.info(f"Updating CBIR labels for image: {cbir_path} -> {labels}")
+    logger.info("Updating CBIR labels for image: %s -> %s", cbir_path, labels)
     
     try:
         response = requests.post(
@@ -482,13 +465,13 @@ def update_image_labels(
             return True, "Labels updated successfully"
         elif response.status_code == 404:
             # Image not in CBIR index - not an error, just not indexed yet
-            logger.info(f"Image not in CBIR index (skipping label update): {cbir_path}")
+            logger.info("Image not in CBIR index (skipping label update): %s", cbir_path)
             return True, "Image not in CBIR index (skipped)"
         else:
             error_detail = response.json().get("detail", response.text)
-            logger.error(f"CBIR label update failed: {error_detail}")
+            logger.error("CBIR label update failed: %s", error_detail)
             return False, f"Label update failed: {error_detail}"
             
     except requests.RequestException as e:
-        logger.error(f"CBIR service request failed: {e}")
+        logger.error("CBIR service request failed: %s", e)
         return False, f"CBIR service error: {str(e)}"

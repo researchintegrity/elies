@@ -8,14 +8,16 @@ Provides endpoints for administrators to:
 - Reset user passwords
 - Activate/deactivate user accounts
 """
+import re
 from fastapi import APIRouter, HTTPException, status, Depends, Query
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 from bson import ObjectId
 import math
 import logging
 
 from app.schemas import (
+    MessageResponse,
     AdminUserResponse,
     AdminUserListResponse,
     AdminUpdateQuotaRequest,
@@ -28,8 +30,11 @@ from app.utils.security import (
     get_current_admin_user,
     hash_password,
     generate_secure_password,
+    revoke_user_tokens,
 )
-from app.db.mongodb import get_users_collection
+from app.db.mongodb import get_admin_audit_log_collection, get_users_collection
+from app.services.audit_log import record_admin_action
+from app.services.deletion_service import request_account_deletion
 
 logger = logging.getLogger(__name__)
 
@@ -41,10 +46,10 @@ router = APIRouter(prefix="/admin", tags=["Admin"])
 # ============================================================================
 
 @router.get("/users", response_model=AdminUserListResponse)
-async def list_users(
+def list_users(
     page: int = Query(1, ge=1, description="Page number (starts at 1)"),
     page_size: int = Query(20, ge=1, le=100, description="Number of users per page"),
-    search: Optional[str] = Query(None, description="Search by username or email"),
+    search: Optional[str] = Query(None, max_length=100, description="Search by username or email"),
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
     role: Optional[str] = Query(None, description="Filter by role (e.g., 'admin')"),
     current_admin: dict = Depends(get_current_admin_user)
@@ -66,10 +71,12 @@ async def list_users(
     query = {}
     
     if search:
+        # Literal, case-insensitive match: user input is never a regex
+        pattern = {"$regex": re.escape(search), "$options": "i"}
         query["$or"] = [
-            {"username": {"$regex": search, "$options": "i"}},
-            {"email": {"$regex": search, "$options": "i"}},
-            {"full_name": {"$regex": search, "$options": "i"}},
+            {"username": pattern},
+            {"email": pattern},
+            {"full_name": pattern},
         ]
     
     if is_active is not None:
@@ -95,7 +102,7 @@ async def list_users(
             user["roles"] = ["user"]
         users.append(AdminUserResponse(**user).model_dump(by_alias=True))
     
-    logger.info(f"Admin {current_admin['username']} listed users (page {page}, total {total})")
+    logger.info("Admin %s listed users (page %s, total %s)", current_admin['username'], page, total)
     
     return {
         "users": users,
@@ -107,7 +114,7 @@ async def list_users(
 
 
 @router.get("/users/{user_id}", response_model=AdminUserResponse)
-async def get_user(
+def get_user(
     user_id: str,
     current_admin: dict = Depends(get_current_admin_user)
 ) -> dict:
@@ -140,7 +147,7 @@ async def get_user(
     if "roles" not in user:
         user["roles"] = ["user"]
     
-    logger.info(f"Admin {current_admin['username']} viewed user {user['username']}")
+    logger.info("Admin %s viewed user %s", current_admin['username'], user['username'])
     
     return AdminUserResponse(**user).model_dump(by_alias=True)
 
@@ -150,7 +157,7 @@ async def get_user(
 # ============================================================================
 
 @router.patch("/users/{user_id}/quota", response_model=AdminUserResponse)
-async def update_user_quota(
+def update_user_quota(
     user_id: str,
     quota_update: AdminUpdateQuotaRequest,
     current_admin: dict = Depends(get_current_admin_user)
@@ -189,7 +196,7 @@ async def update_user_quota(
         {
             "$set": {
                 "storage_limit_bytes": quota_update.storage_limit_bytes,
-                "updated_at": datetime.utcnow(),
+                "updated_at": datetime.now(timezone.utc),
             }
         },
         return_document=True
@@ -202,9 +209,9 @@ async def update_user_quota(
     old_quota = user.get("storage_limit_bytes", 0)
     new_quota = quota_update.storage_limit_bytes
     logger.info(
-        f"Admin {current_admin['username']} updated quota for user {user['username']}: "
-        f"{old_quota} -> {new_quota} bytes"
+        "Admin %s updated quota for user %s: %s -> %s bytes", current_admin['username'], user['username'], old_quota, new_quota
     )
+    record_admin_action(current_admin, "update_quota", user, {"old": old_quota, "new": new_quota})
     
     return AdminUserResponse(**result).model_dump(by_alias=True)
 
@@ -214,7 +221,7 @@ async def update_user_quota(
 # ============================================================================
 
 @router.patch("/users/{user_id}/role", response_model=AdminUserResponse)
-async def update_user_role(
+def update_user_role(
     user_id: str,
     role_update: AdminUpdateRoleRequest,
     current_admin: dict = Depends(get_current_admin_user)
@@ -260,17 +267,20 @@ async def update_user_role(
         {
             "$set": {
                 "roles": role_update.roles,
-                "updated_at": datetime.utcnow(),
+                "updated_at": datetime.now(timezone.utc),
             }
         },
         return_document=True
     )
     
+    # Existing tokens were issued for the old roles
+    revoke_user_tokens(object_id)
+
     old_roles = target_user.get("roles", ["user"])
     logger.info(
-        f"Admin {current_admin['username']} updated roles for user {target_user['username']}: "
-        f"{old_roles} -> {role_update.roles}"
+        "Admin %s updated roles for user %s: %s -> %s", current_admin['username'], target_user['username'], old_roles, role_update.roles
     )
+    record_admin_action(current_admin, "update_roles", target_user, {"old": old_roles, "new": role_update.roles})
     
     return AdminUserResponse(**result).model_dump(by_alias=True)
 
@@ -280,7 +290,7 @@ async def update_user_role(
 # ============================================================================
 
 @router.post("/users/{user_id}/reset-password", response_model=AdminResetPasswordResponse)
-async def reset_user_password(
+def reset_user_password(
     user_id: str,
     password_request: AdminResetPasswordRequest = None,
     current_admin: dict = Depends(get_current_admin_user)
@@ -338,15 +348,19 @@ async def reset_user_password(
         {
             "$set": {
                 "hashed_password": hashed_password,
-                "updated_at": datetime.utcnow(),
+                # The user should replace an admin-chosen password (PUT /users/me/password)
+                "must_change_password": True,
+                "updated_at": datetime.now(timezone.utc),
             }
         }
     )
     
+    revoke_user_tokens(object_id)
+
     logger.info(
-        f"Admin {current_admin['username']} reset password for user {target_user['username']} "
-        f"(generated: {generated})"
+        "Admin %s reset password for user %s (generated: %s)", current_admin['username'], target_user['username'], generated
     )
+    record_admin_action(current_admin, "reset_password", target_user, {"generated": generated})
     
     response = {
         "message": f"Password reset successfully for user {target_user['username']}"
@@ -363,7 +377,7 @@ async def reset_user_password(
 # ============================================================================
 
 @router.patch("/users/{user_id}/status", response_model=AdminUserResponse)
-async def update_user_status(
+def update_user_status(
     user_id: str,
     status_update: AdminUpdateUserStatusRequest,
     current_admin: dict = Depends(get_current_admin_user)
@@ -409,28 +423,84 @@ async def update_user_status(
         {
             "$set": {
                 "is_active": status_update.is_active,
-                "updated_at": datetime.utcnow(),
+                "updated_at": datetime.now(timezone.utc),
             }
         },
         return_document=True
     )
     
+    if not status_update.is_active:
+        revoke_user_tokens(object_id)
+
     # Ensure roles field exists
     if "roles" not in result:
         result["roles"] = ["user"]
     
     action = "activated" if status_update.is_active else "deactivated"
-    logger.info(f"Admin {current_admin['username']} {action} user {target_user['username']}")
+    logger.info("Admin %s %s user %s", current_admin['username'], action, target_user['username'])
+    record_admin_action(current_admin, action, target_user, {"is_active": status_update.is_active})
     
     return AdminUserResponse(**result).model_dump(by_alias=True)
+
+
+@router.delete("/users/{user_id}", response_model=MessageResponse)
+def delete_user(
+    user_id: str,
+    current_admin: dict = Depends(get_current_admin_user)
+) -> dict:
+    """
+    Delete a user account and all of its data.
+
+    Admins cannot delete themselves here (use DELETE /users/me), and another
+    administrator must be demoted first.
+
+    Requires admin privileges.
+    """
+    if str(current_admin["_id"]) == user_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Use DELETE /users/me to delete your own account"
+        )
+    target_user = get_users_collection().find_one({"_id": ObjectId(user_id)})
+    if not target_user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    if "admin" in target_user.get("roles", []):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Remove the admin role before deleting an administrator"
+        )
+
+    request_account_deletion(user_id)
+    logger.info("Admin %s deleted user %s", current_admin['username'], target_user['username'])
+    record_admin_action(current_admin, "delete_user", target_user)
+    return {"message": f"User {target_user['username']} is being deleted"}
 
 
 # ============================================================================
 # ADMIN STATISTICS
 # ============================================================================
 
+@router.get("/audit-log")
+def list_audit_log(
+    current_admin: dict = Depends(get_current_admin_user),
+    target_user_id: Optional[str] = Query(None, description="Only actions on this user"),
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=1, le=200),
+) -> dict:
+    """
+    Administrator actions, newest first (quota, role, password, status and
+    account deletion changes). Requires admin privileges.
+    """
+    query = {"target_user_id": target_user_id} if target_user_id else {}
+    collection = get_admin_audit_log_collection()
+    entries = list(collection.find(query).sort("created_at", -1).skip((page - 1) * per_page).limit(per_page))
+    for entry in entries:
+        entry["_id"] = str(entry["_id"])
+    return {"items": entries, "total": collection.count_documents(query), "page": page, "per_page": per_page}
+
+
 @router.get("/stats")
-async def get_admin_stats(
+def get_admin_stats(
     current_admin: dict = Depends(get_current_admin_user)
 ) -> dict:
     """
@@ -480,6 +550,6 @@ async def get_admin_stats(
     # Count admins separately
     stats["admin_count"] = collection.count_documents({"roles": "admin"})
     
-    logger.info(f"Admin {current_admin['username']} retrieved system stats")
+    logger.info("Admin %s retrieved system stats", current_admin['username'])
     
     return stats

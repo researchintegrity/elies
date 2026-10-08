@@ -5,7 +5,7 @@ Separate from single annotations for clearer data management.
 from fastapi import APIRouter, Depends, status, Query, HTTPException
 from typing import List, Optional
 from bson import ObjectId
-from datetime import datetime
+from datetime import datetime, timezone
 
 from app.schemas import (
     DualAnnotationCreate, 
@@ -21,7 +21,7 @@ router = APIRouter(prefix="/annotations/dual", tags=["dual-annotations"])
 
 
 @router.post("", response_model=DualAnnotationResponse, status_code=status.HTTP_201_CREATED)
-async def create_dual_annotation(
+def create_dual_annotation(
     annotation_data: DualAnnotationCreate,
     current_user: dict = Depends(get_current_user)
 ):
@@ -42,13 +42,13 @@ async def create_dual_annotation(
     user_id_str = str(current_user["_id"])
     
     # Verify both images exist and belong to user
-    await get_owned_resource(
+    get_owned_resource(
         get_images_collection,
         annotation_data.source_image_id,
         user_id_str,
         "Source Image"
     )
-    await get_owned_resource(
+    get_owned_resource(
         get_images_collection,
         annotation_data.target_image_id,
         user_id_str,
@@ -62,13 +62,13 @@ async def create_dual_annotation(
         "source_image_id": annotation_data.source_image_id,
         "target_image_id": annotation_data.target_image_id,
         "link_id": annotation_data.link_id,
-        "coords": annotation_data.coords.dict(exclude_none=True),
+        "coords": annotation_data.coords.model_dump(exclude_none=True),
         "pair_name": annotation_data.pair_name,
         "pair_color": annotation_data.pair_color,
         "text": annotation_data.text,
         "shape_type": annotation_data.shape_type or "rectangle",
-        "created_at": datetime.utcnow(),
-        "updated_at": datetime.utcnow()
+        "created_at": datetime.now(timezone.utc),
+        "updated_at": datetime.now(timezone.utc)
     }
     
     result = annotations_col.insert_one(annotation_doc)
@@ -78,7 +78,7 @@ async def create_dual_annotation(
 
 
 @router.post("/batch", response_model=List[DualAnnotationResponse], status_code=status.HTTP_201_CREATED)
-async def create_dual_annotations_batch(
+def create_dual_annotations_batch(
     batch_data: DualAnnotationBatchCreate,
     current_user: dict = Depends(get_current_user)
 ):
@@ -130,13 +130,13 @@ async def create_dual_annotations_batch(
             "source_image_id": ann_data.source_image_id,
             "target_image_id": ann_data.target_image_id,
             "link_id": ann_data.link_id,
-            "coords": ann_data.coords.dict(exclude_none=True),
+            "coords": ann_data.coords.model_dump(exclude_none=True),
             "pair_name": ann_data.pair_name,
             "pair_color": ann_data.pair_color,
             "text": ann_data.text,
             "shape_type": ann_data.shape_type or "rectangle",
-            "created_at": datetime.utcnow(),
-            "updated_at": datetime.utcnow()
+            "created_at": datetime.now(timezone.utc),
+            "updated_at": datetime.now(timezone.utc)
         }
         
         result = annotations_col.insert_one(annotation_doc)
@@ -147,7 +147,7 @@ async def create_dual_annotations_batch(
 
 
 @router.get("/linked-images/{image_id}", response_model=List[str])
-async def get_dual_linked_images(
+def get_dual_linked_images(
     image_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -195,12 +195,12 @@ async def get_dual_linked_images(
 
 
 @router.get("", response_model=List[DualAnnotationResponse])
-async def list_dual_annotations(
+def list_dual_annotations(
     source_image_id: str = Query(..., description="Source image ID to get annotations for"),
     target_image_id: Optional[str] = Query(None, description="Optional target image ID to filter by"),
     current_user: dict = Depends(get_current_user),
-    limit: int = 100,
-    offset: int = 0
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0)
 ):
     """
     Get dual-image annotations for a specific source image.
@@ -245,7 +245,7 @@ async def list_dual_annotations(
 
 
 @router.get("/{annotation_id}", response_model=DualAnnotationResponse)
-async def get_dual_annotation(
+def get_dual_annotation(
     annotation_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -254,7 +254,7 @@ async def get_dual_annotation(
     """
     user_id_str = str(current_user["_id"])
     
-    annotation = await get_owned_resource(
+    annotation = get_owned_resource(
         get_dual_annotations_collection,
         annotation_id,
         user_id_str,
@@ -266,7 +266,7 @@ async def get_dual_annotation(
 
 
 @router.delete("/{annotation_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_dual_annotation(
+def delete_dual_annotation(
     annotation_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -276,7 +276,7 @@ async def delete_dual_annotation(
     user_id_str = str(current_user["_id"])
     
     # Verify annotation exists and belongs to user
-    await get_owned_resource(
+    get_owned_resource(
         get_dual_annotations_collection,
         annotation_id,
         user_id_str,
@@ -291,7 +291,7 @@ async def delete_dual_annotation(
 
 
 @router.put("/{annotation_id}", response_model=DualAnnotationResponse)
-async def update_dual_annotation(
+def update_dual_annotation(
     annotation_id: str,
     update_data: DualAnnotationUpdate,
     current_user: dict = Depends(get_current_user)
@@ -303,7 +303,7 @@ async def update_dual_annotation(
     user_id_str = str(current_user["_id"])
     
     # Verify annotation exists and belongs to user
-    existing = await get_owned_resource(
+    existing = get_owned_resource(
         get_dual_annotations_collection,
         annotation_id,
         user_id_str,
@@ -313,7 +313,7 @@ async def update_dual_annotation(
     # Build update document with only provided fields
     update_fields = {}
     if update_data.coords is not None:
-        update_fields["coords"] = update_data.coords.dict(exclude_none=True)
+        update_fields["coords"] = update_data.coords.model_dump(exclude_none=True)
     if update_data.pair_name is not None:
         update_fields["pair_name"] = update_data.pair_name
     if update_data.pair_color is not None:
@@ -326,7 +326,7 @@ async def update_dual_annotation(
         existing["_id"] = str(existing["_id"])
         return DualAnnotationResponse(**existing)
     
-    update_fields["updated_at"] = datetime.utcnow()
+    update_fields["updated_at"] = datetime.now(timezone.utc)
     
     annotations_col = get_dual_annotations_collection()
     annotations_col.update_one(
@@ -341,7 +341,7 @@ async def update_dual_annotation(
 
 
 @router.delete("/by-link/{link_id}", status_code=status.HTTP_204_NO_CONTENT)
-async def delete_dual_annotations_by_link(
+def delete_dual_annotations_by_link(
     link_id: str,
     current_user: dict = Depends(get_current_user)
 ):
@@ -365,7 +365,7 @@ async def delete_dual_annotations_by_link(
 
 
 @router.put("/by-link/{link_id}")
-async def update_dual_annotations_by_link(
+def update_dual_annotations_by_link(
     link_id: str,
     update_data: DualAnnotationUpdate,
     current_user: dict = Depends(get_current_user)
@@ -391,7 +391,7 @@ async def update_dual_annotations_by_link(
     if not update_fields:
         return {"updated_count": 0, "message": "No fields to update"}
     
-    update_fields["updated_at"] = datetime.utcnow()
+    update_fields["updated_at"] = datetime.now(timezone.utc)
     
     result = annotations_col.update_many(
         {"link_id": link_id, "user_id": user_id_str},
