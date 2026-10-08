@@ -145,6 +145,11 @@ TRUFOR_DOCKER_IMAGE = "trufor:latest"
 TRUFOR_TIMEOUT = _env_int("TRUFOR_TIMEOUT", 600)
 TRUFOR_USE_GPU = _env_bool("TRUFOR_USE_GPU", False)
 
+# Docker image for Copy-Move Detection - Forgeryscope method (system_modules/forgeryscope)
+FORGERYSCOPE_DOCKER_IMAGE = "forgeryscope:latest"
+FORGERYSCOPE_TIMEOUT = _env_int("FORGERYSCOPE_TIMEOUT", 900)
+FORGERYSCOPE_USE_GPU = _env_bool("FORGERYSCOPE_USE_GPU", False)
+
 # ============================================================================
 # CBIR (Content-Based Image Retrieval) SETTINGS
 # ============================================================================

@@ -90,6 +90,15 @@ The workers mount `/var/run/docker.sock`, which gives them control of the
 host's Docker daemon. Do not expose the workers or the Redis broker to
 untrusted networks.
 
+The `forgeryscope` tool image (copy-move detection method `forgeryscope`)
+downloads about 1 GB of model weights from GitHub while it builds, and needs
+no network when it runs. It runs on CPU by default: about 10 seconds to load
+its models, then from a few seconds to about a minute per figure, with up to
+2 GB of memory (keep `DOCKER_TOOL_MEMORY` above that). To run it on a GPU,
+build it with CUDA wheels (uncomment the `args` of the `forgeryscope` service
+in the compose file) and set `FORGERYSCOPE_USE_GPU=true`. Its YOLO weights
+are licensed by Ultralytics under AGPL-3.0, like ELIES.
+
 ## 5. Create the first administrator
 
 There is no default account. Create an administrator from the API container:

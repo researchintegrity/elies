@@ -40,7 +40,7 @@ explains authentication, conventions and the main workflows.
 | POST | `/analyses/trufor` | bearer | Start TruFor forgery detection analysis. |
 | DELETE | `/analyses/{analysis_id}` | bearer | Delete an analysis by ID. |
 | GET | `/analyses/{analysis_id}` | bearer | Get analysis details by ID. |
-| GET | `/analyses/{analysis_id}/results/{result_type}/download` | bearer | Download an analysis result image file. |
+| GET | `/analyses/{analysis_id}/results/{result_type}/download` | bearer | Download an analysis result file. |
 
 ## api (deprecated)
 

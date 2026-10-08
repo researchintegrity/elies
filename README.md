@@ -131,6 +131,7 @@ ELIES integrates multiple specialized modules to detect manipulation.
 | **[CBIR Search](https://github.com/researchintegrity/cbir-system)** | Finds similar images across datasets. | <div align="center">✅</div> |
 | **[TruFor](https://github.com/researchintegrity/TruFor)** | Detects cheapfakes and image manipulations. | <div align="center">✅</div> |
 | **[Copy-Move Detection](https://github.com/researchintegrity/copy-move-detection)** | Identifies duplicated regions within and across images.| <div align="center">✅</div> |
+| **[Forgeryscope](https://github.com/researchintegrity/forgeryscope)** | Finds duplicated panels, panel regions and western blot lanes within a figure. | <div align="center">✅</div> |
 | **[Provenance Analysis](https://github.com/researchintegrity/provenance-analysis)** | Tracks reused and manipulated data across articles and datasets. | <div align="center">✅</div> |
 
 
@@ -154,6 +155,7 @@ Learn more about her work at her blog: [Science Integrity Digest](https://scienc
 **Special Thanks:**
 *   **[Forensically](https://29a.ch/photo-forensics/#help)**: The Image Analysis module is deeply inspired by this project. Shoutout to [Jonas Wagner](https://github.com/jwagner).
 *   **[UNINA Image Processing Research Group](https://www.grip.unina.it/)**: For their work on Dense-Field copy-move detection and [TruFor](https://github.com/grip-unina/TruFor) methods.
+*   **Uladzislau Leketush**: For [Forgeryscope](https://github.com/vlad3996/forgeryscope), his winning solution of the Kaggle *Scientific Image Forgery Detection* competition.
 
 ---
 

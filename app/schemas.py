@@ -1073,6 +1073,8 @@ class CopyMoveMethod(str, Enum):
     """Detection method for copy-move analysis"""
     DENSE = "dense"  # Dense matching (original copy-move-detection module, methods 1-5)
     KEYPOINT = "keypoint"  # Keypoint matching (copy-move-detection-keypoint module, cross-image only)
+    # Duplicated panels, regions and blot lanes in one figure (forgeryscope module, single-image only)
+    FORGERYSCOPE = "forgeryscope"
 
 
 class KeypointDescriptor(str, Enum):
@@ -1113,12 +1115,12 @@ class AnalysisBase(BaseModel):
 
 
 class SingleImageAnalysisCreate(BaseModel):
-    """Request to create a single image analysis (dense method only)"""
+    """Request to create a single image copy-move analysis"""
     image_id: str
-    # Single-image detection only supports dense method
     method: CopyMoveMethod = Field(
         CopyMoveMethod.DENSE,
-        description="Detection method for single image (only 'dense' supported)"
+        description="Detection method: 'dense' (block matching) or 'forgeryscope' "
+                    "(duplicated panels, regions and western blot lanes)"
     )
     # Dense method sub-parameter (1-5)
     dense_method: int = Field(2, ge=1, le=5, description="Dense method variant (1-5)")
@@ -1149,6 +1151,13 @@ class CrossImageAnalysisCreate(BaseModel):
         description="Keypoint descriptor type, only used when method='keypoint'"
     )
 
+    @field_validator("method")
+    @classmethod
+    def method_compares_two_images(cls, v: CopyMoveMethod) -> CopyMoveMethod:
+        if v == CopyMoveMethod.FORGERYSCOPE:
+            raise ValueError("'forgeryscope' analyses a single figure: use /analyses/copy-move/single")
+        return v
+
 
 class AnalysisResult(BaseModel):
     """Generic analysis result container"""
@@ -1167,7 +1176,13 @@ class AnalysisResult(BaseModel):
     pred_map: Optional[str] = None  # Prediction/localization map path
     conf_map: Optional[str] = None  # Confidence map path
     noiseprint: Optional[str] = None  # Noiseprint map path (optional)
-    
+
+    # Forgeryscope copy-move fields
+    verdict: Optional[str] = None  # 'authentic' or 'duplicated'
+    detections: Optional[List[Dict[str, Any]]] = None  # Groups of duplicated regions
+    panels: Optional[List[Dict[str, Any]]] = None  # Panels detected in the figure
+    report: Optional[str] = None  # Path of the full JSON report
+
     # CBIR specific fields
     query_image_id: Optional[str] = None
     top_k: Optional[int] = None

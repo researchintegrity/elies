@@ -93,6 +93,7 @@ services:
       HOST_WORKSPACE_PATH: ${HOST_WORKSPACE_PATH}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (see .env.example)}
       TRUFOR_USE_GPU: "false"
+      FORGERYSCOPE_USE_GPU: ${FORGERYSCOPE_USE_GPU:-false}
       # CBIR service configuration (use container name when running in Docker)
       CBIR_SERVICE_HOST: ${CBIR_SERVICE_HOST:-cbir-service}
       CBIR_SERVICE_PORT: ${CBIR_SERVICE_PORT:-8001}
@@ -125,6 +126,7 @@ services:
       HOST_WORKSPACE_PATH: ${HOST_WORKSPACE_PATH}
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env (see .env.example)}
       TRUFOR_USE_GPU: "false"
+      FORGERYSCOPE_USE_GPU: ${FORGERYSCOPE_USE_GPU:-false}
       # CBIR service configuration (use container name when running in Docker)
       CBIR_SERVICE_HOST: ${CBIR_SERVICE_HOST:-cbir-service}
       CBIR_SERVICE_PORT: ${CBIR_SERVICE_PORT:-8001}
@@ -342,6 +344,16 @@ services:
     build:
       context: system_modules/TruFor/docker
       dockerfile: Dockerfile
+    profiles: ["tools"]
+
+  forgeryscope:
+    image: forgeryscope:latest
+    build:
+      context: system_modules/forgeryscope
+      dockerfile: docker/Dockerfile
+      # CPU by default; for GPU support (FORGERYSCOPE_USE_GPU=true) build with CUDA wheels:
+      # args:
+      #   TORCH_INDEX_URL: https://download.pytorch.org/whl/cu128
     profiles: ["tools"]
 
 volumes:

@@ -24,4 +24,5 @@ Specialized containers/modules for specific analysis tasks:
 - **CBIR System**: Content-Based Image Retrieval.
 - **Panel Extractor**: Extracts sub-panels from compound figures.
 - **TruFor**: Forgery detection model.
+- **Forgeryscope**: Finds duplicated panels, panel regions and western blot lanes within a figure.
 - **Provenance Analysis**: Tracks image lineage.

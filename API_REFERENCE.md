@@ -216,7 +216,13 @@ DELETE /analyses/{analysis_id}
 ```
 
 Copy-move `method` is `keypoint` (recommended) or `dense` (with
-`dense_method` 1-5). Screening-tool results come from the browser tools (ELA,
+`dense_method` 1-5). Single-image copy-move also accepts `forgeryscope`,
+which finds duplicated panels, panel regions and western blot lanes in a
+figure. Its results add `verdict` (`authentic` or `duplicated`),
+`detections` (one entry per group of duplicated regions: panel type, panel
+ids, similarity, bounding box, matched pairs or lanes) and `panels` (the
+detected panels); the `matches` and `clusters` images exist only when
+duplication is found, and `report` downloads the full JSON report. Screening-tool results come from the browser tools (ELA,
 noise analysis, ...) and are stored as completed analyses; the optional
 result image is validated and counted in the quota.
 

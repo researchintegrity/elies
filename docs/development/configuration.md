@@ -82,10 +82,12 @@ The workers run each analysis tool in its own container.
 | `DOCKER_TOOL_PIDS_LIMIT` | `1024` | Process limit per tool container. |
 | `DOCKER_TOOL_USER` | image default | Run tools as this user (e.g. `1000:1000`); the output folders must be writable by it. |
 | `TRUFOR_USE_GPU` | `false` | Run TruFor on an NVIDIA GPU (needs the NVIDIA container runtime). |
+| `FORGERYSCOPE_USE_GPU` | `false` | Run Forgeryscope on an NVIDIA GPU (needs the NVIDIA container runtime and the image built with CUDA wheels, see the deployment guide). |
 | `DOCKER_EXTRACTION_TIMEOUT` | `300` | Seconds for PDF image extraction. |
 | `PANEL_EXTRACTION_TIMEOUT` | `600` | Seconds for panel extraction. |
 | `COPY_MOVE_DETECTION_TIMEOUT`, `COPY_MOVE_KEYPOINT_TIMEOUT` | `600` | Seconds for copy-move detection (dense, keypoint). |
 | `TRUFOR_TIMEOUT` | `600` | Seconds for TruFor. |
+| `FORGERYSCOPE_TIMEOUT` | `900` | Seconds for Forgeryscope copy-move detection. |
 | `WATERMARK_REMOVAL_TIMEOUT` | `300` | Seconds for watermark removal. |
 | `CBIR_TIMEOUT` | `120` | Seconds for a CBIR request. |
 | `CBIR_HEALTH_CACHE_SECONDS` | `15` | How long a CBIR health check result is reused. |

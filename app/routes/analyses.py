@@ -4,6 +4,7 @@ from app.utils.security import get_current_user, get_current_user_media
 from app.db.mongodb import get_analyses_collection, get_images_collection
 from app.schemas import (
     AnalysisResponse,
+    CopyMoveMethod,
     CrossImageAnalysisCreate,
     SingleImageAnalysisCreate,
     TruForAnalysisCreate,
@@ -304,23 +305,24 @@ def download_analysis_result(
     current_user: dict = Depends(get_current_user_media)
 ):
     """
-    Download an analysis result image file.
-    
+    Download an analysis result file.
+
     Args:
         analysis_id: Analysis ID
         result_type: Type of result to download:
-            - Copy-move: 'matches', 'clusters'
+            - Copy-move: 'matches', 'clusters'; 'report' (JSON) for the
+              'forgeryscope' method
             - TruFor: 'pred_map', 'conf_map', 'noiseprint'
             - Screening Tool: 'result_image'
         current_user: Current authenticated user
-        
+
     Returns:
-        FileResponse with the result image
+        FileResponse with the result image (PNG) or report (JSON)
     """
     user_id_str = str(current_user["_id"])
-    
+
     # Validate result_type - support copy-move, trufor, and screening tool result types
-    valid_types = ("matches", "clusters", "pred_map", "conf_map", "noiseprint", "result_image")
+    valid_types = ("matches", "clusters", "report", "pred_map", "conf_map", "noiseprint", "result_image")
     if result_type not in valid_types:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -353,8 +355,8 @@ def download_analysis_result(
                     elif result_type == "noiseprint" and "_noiseprint" in f:
                         file_path = f
                         break
-    elif result_type == "result_image":
-        # Screening tool analysis uses 'result_image' key directly
+    elif result_type in ("result_image", "report"):
+        # Screening tool image, Forgeryscope report: stored under their own key
         file_path = results.get(result_type)
     else:
         # Copy-move uses '{type}_image' keys
@@ -378,7 +380,7 @@ def download_analysis_result(
     return FileResponse(
         path=file_path,
         filename=os.path.basename(file_path),
-        media_type="image/png"
+        media_type="application/json" if result_type == "report" else "image/png"
     )
 
 
@@ -389,10 +391,12 @@ def analyze_copy_move_single(
 ):
     """
     Start single-image copy-move detection analysis.
-    
-    Supports two detection methods:
-    - 'keypoint': Advanced keypoint-based detection (recommended)
+
+    Detection methods:
     - 'dense': Block-based dense matching
+    - 'keypoint': Keypoint-based detection
+    - 'forgeryscope': Duplicated panels, panel regions and western blot
+      lanes (results also carry 'verdict', 'detections' and 'panels')
     """
     user_id_str = str(current_user["_id"])
     ensure_job_capacity(user_id_str)
@@ -432,7 +436,8 @@ def analyze_copy_move_single(
     job_id = create_job_log(
         user_id=user_id_str,
         job_type=JobType.COPY_MOVE_SINGLE,
-        title="Copy-Move Detection (Single Image)",
+        title="Copy-Move Detection (Forgeryscope)" if request.method == CopyMoveMethod.FORGERYSCOPE
+        else "Copy-Move Detection (Single Image)",
         input_data={"image_id": request.image_id, "analysis_id": analysis_id, "method": request.method.value}
     )
     

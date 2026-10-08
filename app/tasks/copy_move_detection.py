@@ -1,9 +1,11 @@
 """
 Copy-Move Detection tasks for async processing.
 
-Supports two detection methods:
+Supports three detection methods:
 - 'keypoint': Advanced keypoint-based detection (recommended for cross-image)
 - 'dense': Block-based dense matching
+- 'forgeryscope': Duplicated panels, regions and western blot lanes in one
+  figure (single-image only)
 """
 import logging
 from datetime import datetime, timezone
@@ -14,12 +16,14 @@ from app.schemas import AnalysisType, JobType
 from app.tasks.lifecycle import TrackedJob, run_analysis
 from app.utils.file_storage import analysis_output_dir
 from app.utils.docker_copy_move import run_copy_move_detection_with_docker
+from app.utils.docker_forgeryscope import run_forgeryscope_with_docker
 
 logger = logging.getLogger(__name__)
 
 # Method constants for clear documentation
 METHOD_KEYPOINT = "keypoint"
 METHOD_DENSE = "dense"
+METHOD_FORGERYSCOPE = "forgeryscope"
 
 
 def _result_document(method: str, dense_method: int, results: dict, descriptor: str | None = None) -> dict:
@@ -55,7 +59,7 @@ def detect_copy_move(
         image_id: MongoDB ID of the image
         user_id: User ID
         image_path: Path to the image file
-        method: Detection method ('keypoint' or 'dense')
+        method: Detection method ('keypoint', 'dense' or 'forgeryscope')
         dense_method: Dense method variant (1-5), only used when method='dense'
         job_id: Pre-created job ID from the route (for pending state tracking)
     """
@@ -64,7 +68,25 @@ def detect_copy_move(
         {"image_id": image_id, "analysis_id": analysis_id, "method": method}, analysis_id=analysis_id,
     )
 
+    def report_status(message: str) -> None:
+        try:
+            job.progress(None, message)
+        except Exception as e:
+            logger.error("Failed to update status for analysis %s: %s", analysis_id, e)
+
     def work():
+        if method == METHOD_FORGERYSCOPE:
+            success, message, results = run_forgeryscope_with_docker(
+                analysis_id=analysis_id,
+                analysis_type=AnalysisType.SINGLE_IMAGE_COPY_MOVE,
+                user_id=user_id,
+                image_path=image_path,
+                status_callback=report_status,
+            )
+            if not success:
+                return False, message, None
+            return True, message, {"method": method, "timestamp": datetime.now(timezone.utc), **results}
+
         success, message, results = run_copy_move_detection_with_docker(
             analysis_id=analysis_id,
             analysis_type=AnalysisType.SINGLE_IMAGE_COPY_MOVE,
